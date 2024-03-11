@@ -227,32 +227,58 @@ where
     pub fn elaborate_drop(&mut self, bb: BasicBlock) {
         match self.elaborator.drop_style(self.path, DropFlagMode::Deep) {
             DropStyle::Dead => {
+                eprintln!("elaborate_drop: dead");
+                let test_block = self.goto_block(self.succ, self.unwind);
+                let loca : Location = Location {block: test_block, statement_index: 0};
                 self.elaborator
                     .patch()
-                    .patch_terminator(bb, TerminatorKind::Goto { target: self.succ });
+                    .add_statement(loca, StatementKind::ConstEvalCounter);
+                self.elaborator
+                    .patch()
+                    .patch_terminator(bb, TerminatorKind::Goto { target: test_block });
             }
             DropStyle::Static => {
-                self.elaborator.patch().patch_terminator(
-                    bb,
-                    TerminatorKind::Drop {
-                        place: self.place,
-                        target: self.succ,
-                        unwind: self.unwind.into_action(),
-                        replace: false,
-                    },
-                );
+                eprintln!("elaborate_drop: static");
+                let test_block = self.goto_block(self.succ, self.unwind);
+                let loca : Location = Location {block: test_block, statement_index: 0};
+                self.elaborator
+                    .patch()
+                    .add_statement(loca, StatementKind::ConstEvalCounter);
+                self.elaborator
+                    .patch()
+                    .patch_terminator(
+                        bb,
+                        TerminatorKind::Drop {
+                            place: self.place,
+                            target: test_block,
+                            unwind: self.unwind.into_action(),
+                            replace: false,
+                        },
+                    );
             }
             DropStyle::Conditional => {
+                eprintln!("elaborate_drop: conditional");
                 let drop_bb = self.complete_drop(self.succ, self.unwind);
+                let test_block = self.goto_block(drop_bb, self.unwind);
+                let loca : Location = Location {block: test_block, statement_index: 0};
                 self.elaborator
                     .patch()
-                    .patch_terminator(bb, TerminatorKind::Goto { target: drop_bb });
+                    .add_statement(loca, StatementKind::ConstEvalCounter);
+                self.elaborator
+                    .patch()
+                    .patch_terminator(bb, TerminatorKind::Goto { target: test_block });
             }
             DropStyle::Open => {
+                eprintln!("elaborate_drop: open");
                 let drop_bb = self.open_drop();
+                let test_block = self.goto_block(drop_bb, self.unwind);
+                let loca : Location = Location {block: test_block, statement_index: 0};
                 self.elaborator
                     .patch()
-                    .patch_terminator(bb, TerminatorKind::Goto { target: drop_bb });
+                    .add_statement(loca, StatementKind::ConstEvalCounter);
+                self.elaborator
+                    .patch()
+                    .patch_terminator(bb, TerminatorKind::Goto { target: test_block });
             }
         }
     }
