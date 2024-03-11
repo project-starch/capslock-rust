@@ -292,7 +292,7 @@ fn run_compiler(
     // the compiler with @empty_file as argv[0] and no more arguments.
     let at_args = at_args.get(1..).unwrap_or_default();
 
-    let args = args::arg_expand_all(&default_early_dcx, at_args);
+    let args = args::arg_expand_all(&default_early_dcx, at_args)?;
 
     let Some(matches) = handle_options(&default_early_dcx, &args) else { return Ok(()) };
 
@@ -676,6 +676,7 @@ fn list_metadata(early_dcx: &EarlyDiagCtxt, sess: &Session, metadata_loader: &dy
                 metadata_loader,
                 &mut v,
                 &sess.opts.unstable_opts.ls,
+                sess.cfg_version,
             )
             .unwrap();
             safe_println!("{}", String::from_utf8(v).unwrap());
@@ -1505,7 +1506,7 @@ pub fn init_logger(early_dcx: &EarlyDiagCtxt, cfg: rustc_log::LoggerConfig) {
 }
 
 pub fn main() -> ! {
-    eprintln!("Compiling using custom rustc for CAPSTONE (Version 0.50).");
+    eprintln!("Compiling using CAPSTONE-Rust custom compiler (v0.50)");
     let start_time = Instant::now();
     let start_rss = get_resident_set_size();
 
@@ -1516,19 +1517,11 @@ pub fn main() -> ! {
     let mut callbacks = TimePassesCallbacks::default();
     let using_internal_features = install_ice_hook(DEFAULT_BUG_REPORT_URL, |_| ());
     let exit_code = catch_with_exit_code(|| {
-        let args = env::args_os()
-            .enumerate()
-            .map(|(i, arg)| {
-                arg.into_string().unwrap_or_else(|arg| {
-                    early_dcx.early_fatal(format!("argument {i} is not valid Unicode: {arg:?}"))
-                })
-            })
-            .collect::<Vec<_>>();
-        RunCompiler::new(&args, &mut callbacks)
+        RunCompiler::new(&args::raw_args(&early_dcx)?, &mut callbacks)
             .set_using_internal_features(using_internal_features)
             .run()
     });
-    
+
     if let Some(format) = callbacks.time_passes {
         let end_rss = get_resident_set_size();
         print_time_passes_entry("total", start_time.elapsed(), start_rss, end_rss, format);
