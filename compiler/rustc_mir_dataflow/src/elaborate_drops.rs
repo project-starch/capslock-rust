@@ -12,6 +12,8 @@ use rustc_span::DUMMY_SP;
 use rustc_target::abi::{FieldIdx, VariantIdx, FIRST_VARIANT};
 use std::{fmt, iter};
 
+use std::env;
+
 /// The value of an inserted drop flag.
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 pub enum DropFlagState {
@@ -225,25 +227,36 @@ where
     // and then we do not need this machinery.
     #[instrument(level = "debug")]
     pub fn elaborate_drop(&mut self, bb: BasicBlock) {
+        let mut is_bootstrap = false;
+        for (key, value) in env::vars() {
+            if key.starts_with("RUSTC_BOOTSTRAP") && (value == "1") {
+                is_bootstrap = true;
+                break;
+            }
+        }
         match self.elaborator.drop_style(self.path, DropFlagMode::Deep) {
             DropStyle::Dead => {
-                eprintln!("elaborate_drop: dead");
+                if !is_bootstrap { //cfg!(target_arch = "x86_64") {
+                    eprintln!("elaborate_drop: dead");
+                }
                 let test_block = self.goto_block(self.succ, self.unwind);
-                let loca : Location = Location {block: test_block, statement_index: 0};
-                self.elaborator
-                    .patch()
-                    .add_statement(loca, StatementKind::ConstEvalCounter);
+                //let loca : Location = Location {block: test_block, statement_index: 0};
+                //self.elaborator
+                //    .patch()
+                //    .add_statement(loca, StatementKind::ConstEvalCounter);
                 self.elaborator
                     .patch()
                     .patch_terminator(bb, TerminatorKind::Goto { target: test_block });
             }
             DropStyle::Static => {
-                eprintln!("elaborate_drop: static");
+                if !is_bootstrap {
+                    eprintln!("elaborate_drop: static");
+                }
                 let test_block = self.goto_block(self.succ, self.unwind);
-                let loca : Location = Location {block: test_block, statement_index: 0};
-                self.elaborator
-                    .patch()
-                    .add_statement(loca, StatementKind::ConstEvalCounter);
+                //let loca : Location = Location {block: test_block, statement_index: 0};
+                //self.elaborator
+                //    .patch()
+                //    .add_statement(loca, StatementKind::ConstEvalCounter);
                 self.elaborator
                     .patch()
                     .patch_terminator(
@@ -257,25 +270,29 @@ where
                     );
             }
             DropStyle::Conditional => {
-                eprintln!("elaborate_drop: conditional");
+                if !is_bootstrap {
+                    eprintln!("elaborate_drop: conditional");
+                }
                 let drop_bb = self.complete_drop(self.succ, self.unwind);
                 let test_block = self.goto_block(drop_bb, self.unwind);
-                let loca : Location = Location {block: test_block, statement_index: 0};
-                self.elaborator
-                    .patch()
-                    .add_statement(loca, StatementKind::ConstEvalCounter);
+                //let loca : Location = Location {block: test_block, statement_index: 0};
+                //self.elaborator
+                //    .patch()
+                //    .add_statement(loca, StatementKind::ConstEvalCounter);
                 self.elaborator
                     .patch()
                     .patch_terminator(bb, TerminatorKind::Goto { target: test_block });
             }
             DropStyle::Open => {
-                eprintln!("elaborate_drop: open");
+                if !is_bootstrap {
+                    eprintln!("elaborate_drop: open");
+                }
                 let drop_bb = self.open_drop();
                 let test_block = self.goto_block(drop_bb, self.unwind);
-                let loca : Location = Location {block: test_block, statement_index: 0};
-                self.elaborator
-                    .patch()
-                    .add_statement(loca, StatementKind::ConstEvalCounter);
+                //let loca : Location = Location {block: test_block, statement_index: 0};
+                //self.elaborator
+                //    .patch()
+                //    .add_statement(loca, StatementKind::ConstEvalCounter);
                 self.elaborator
                     .patch()
                     .patch_terminator(bb, TerminatorKind::Goto { target: test_block });
