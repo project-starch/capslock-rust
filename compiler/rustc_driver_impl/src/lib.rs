@@ -1506,7 +1506,7 @@ pub fn init_logger(early_dcx: &EarlyDiagCtxt, cfg: rustc_log::LoggerConfig) {
 }
 
 pub fn main() -> ! {
-    eprintln!("Compiling using CAPSTONE-Rust custom compiler (v0.50)");
+    eprintln!("Compiling using CAPSTONE-Rust custom compiler (v0.60)");
     let start_time = Instant::now();
     let start_rss = get_resident_set_size();
 
