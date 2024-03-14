@@ -1,3 +1,5 @@
+use rustc_ast::InlineAsmOptions;
+use rustc_ast::InlineAsmTemplatePiece;
 use rustc_hir as hir;
 use rustc_hir::lang_items::LangItem;
 use rustc_index::Idx;
@@ -13,6 +15,8 @@ use rustc_target::abi::{FieldIdx, VariantIdx, FIRST_VARIANT};
 use std::{fmt, iter};
 
 use std::env;
+
+static SPANS: [rustc_span::Span; 1] = [DUMMY_SP];
 
 /// The value of an inserted drop flag.
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
@@ -238,15 +242,25 @@ where
             DropStyle::Dead => {
                 if !is_bootstrap { //cfg!(target_arch = "x86_64") {
                     eprintln!("elaborate_drop: dead");
+                    let block = TerminatorKind::InlineAsm {
+                        template: self.elaborator.tcx().arena.alloc_from_iter([InlineAsmTemplatePiece::String(".insn r 0x5b, 0x1, 0x43, x0, t0, x0".to_string())]),
+                        operands: vec![],
+                        options: InlineAsmOptions::empty(),
+                        line_spans: &SPANS,
+                        targets: vec![self.succ],
+                        unwind: self.unwind.into_action(),
+                    };
+                    let test_block = self.new_block(self.unwind, block);
+                    
+                    self.elaborator
+                        .patch()
+                        .patch_terminator(bb, TerminatorKind::Goto { target: test_block });
                 }
-                let test_block = self.goto_block(self.succ, self.unwind);
-                //let loca : Location = Location {block: test_block, statement_index: 0};
-                //self.elaborator
-                //    .patch()
-                //    .add_statement(loca, StatementKind::ConstEvalCounter);
-                self.elaborator
-                    .patch()
-                    .patch_terminator(bb, TerminatorKind::Goto { target: test_block });
+                else {
+                    self.elaborator
+                        .patch()
+                        .patch_terminator(bb, TerminatorKind::Goto { target: self.succ });
+                }
             }
             DropStyle::Static => {
                 if !is_bootstrap {
