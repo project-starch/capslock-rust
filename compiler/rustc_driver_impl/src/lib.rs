@@ -44,6 +44,7 @@ use rustc_span::symbol::sym;
 use rustc_span::FileName;
 use rustc_target::json::ToJson;
 use rustc_target::spec::{Target, TargetTriple};
+use rustc_mir_build::build::scope::IS_BOOTSTRAP;
 
 use std::cmp::max;
 use std::collections::BTreeMap;
@@ -1505,8 +1506,20 @@ pub fn init_logger(early_dcx: &EarlyDiagCtxt, cfg: rustc_log::LoggerConfig) {
     }
 }
 
-pub fn main() -> ! {
-    eprintln!("Compiling using CAPSTONE-Rust custom compiler (v0.60)");
+pub fn main() -> ! {    
+    unsafe {
+        for (key, value) in env::vars() {
+            if key.starts_with("RUSTC_BOOTSTRAP") && (value == "1") {
+                IS_BOOTSTRAP = true;
+                break;
+            }
+        }
+
+        if !IS_BOOTSTRAP {
+            eprintln!("Compiling using CAPSTONE-Rust custom compiler (v0.75)");
+        }
+    }
+
     let start_time = Instant::now();
     let start_rss = get_resident_set_size();
 

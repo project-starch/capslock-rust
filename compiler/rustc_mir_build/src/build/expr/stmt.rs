@@ -3,6 +3,7 @@ use crate::build::{BlockAnd, BlockAndExtension, BlockFrame, Builder};
 use rustc_middle::middle::region;
 use rustc_middle::mir::*;
 use rustc_middle::thir::*;
+use super::super::scope::IS_BOOTSTRAP;
 
 impl<'a, 'tcx> Builder<'a, 'tcx> {
     /// Builds a block of MIR statements to evaluate the THIR `expr`.
@@ -48,6 +49,12 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                     this.cfg.push_assign(block, source_info, lhs, rhs);
                 }
 
+                let is_bootstrap: bool;
+                unsafe {is_bootstrap = IS_BOOTSTRAP;}
+                if !is_bootstrap {
+                    eprintln!("Assign in stmt.rs ({:?}, {:?}, {:?}, {:?})", block, source_info, lhs, lhs_expr.ty.needs_drop(this.tcx, this.param_env));
+                }
+
                 this.block_context.pop();
                 block.unit()
             }
@@ -77,6 +84,12 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                         this.build_binary_op(block, op, expr_span, lhs_ty, Operand::Copy(lhs), rhs)
                 );
                 this.cfg.push_assign(block, source_info, lhs, result);
+
+                let is_bootstrap: bool;
+                unsafe {is_bootstrap = IS_BOOTSTRAP;}
+                if !is_bootstrap {
+                    eprintln!("AssignOp in stmt.rs ({:?}, {:?}, {:?})", block, source_info, lhs);
+                }
 
                 this.block_context.pop();
                 block.unit()

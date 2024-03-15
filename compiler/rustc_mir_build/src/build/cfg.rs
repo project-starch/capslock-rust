@@ -3,7 +3,6 @@
 use crate::build::CFG;
 use rustc_middle::mir::*;
 use rustc_middle::ty::TyCtxt;
-use std::env;
 
 impl<'tcx> CFG<'tcx> {
     pub(crate) fn block_data(&self, blk: BasicBlock) -> &BasicBlockData<'tcx> {
@@ -39,17 +38,6 @@ impl<'tcx> CFG<'tcx> {
         place: Place<'tcx>,
         rvalue: Rvalue<'tcx>,
     ) {
-        let mut is_bootstrap = false;
-        for (key, value) in env::vars() {
-            if key.starts_with("RUSTC_BOOTSTRAP") && (value == "1") {
-                is_bootstrap = true;
-                break;
-            }
-        }
-        if !is_bootstrap {
-            eprintln!("push_assign({:?}, {:?}, {:?}, {:?})", block, source_info, place, rvalue);
-        }
-        
         self.push(
             block,
             Statement { source_info, kind: StatementKind::Assign(Box::new((place, rvalue))) },
@@ -132,16 +120,6 @@ impl<'tcx> CFG<'tcx> {
         source_info: SourceInfo,
         kind: TerminatorKind<'tcx>,
     ) {
-        let mut is_bootstrap = false;
-        for (key, value) in env::vars() {
-            if key.starts_with("RUSTC_BOOTSTRAP") && (value == "1") {
-                is_bootstrap = true;
-                break;
-            }
-        }
-        if !is_bootstrap {
-            // eprintln!("terminate({:?}, {:?}, {:?})", block, source_info, kind);
-        }
         debug!("terminating block {:?} <- {:?}", block, kind);
         debug_assert!(
             self.block_data(block).terminator.is_none(),

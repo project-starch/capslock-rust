@@ -9,12 +9,11 @@ use rustc_middle::traits::Reveal;
 use rustc_middle::ty::util::IntTypeExt;
 use rustc_middle::ty::GenericArgsRef;
 use rustc_middle::ty::{self, Ty, TyCtxt};
+use rustc_mir_build::build::scope::IS_BOOTSTRAP;
 use rustc_span::source_map::Spanned;
 use rustc_span::DUMMY_SP;
 use rustc_target::abi::{FieldIdx, VariantIdx, FIRST_VARIANT};
 use std::{fmt, iter};
-
-use std::env;
 
 static SPANS: [rustc_span::Span; 1] = [DUMMY_SP];
 
@@ -231,13 +230,9 @@ where
     // and then we do not need this machinery.
     #[instrument(level = "debug")]
     pub fn elaborate_drop(&mut self, bb: BasicBlock) {
-        let mut is_bootstrap = false;
-        for (key, value) in env::vars() {
-            if key.starts_with("RUSTC_BOOTSTRAP") && (value == "1") {
-                is_bootstrap = true;
-                break;
-            }
-        }
+        let is_bootstrap: bool;
+        unsafe {is_bootstrap = IS_BOOTSTRAP;}
+        
         match self.elaborator.drop_style(self.path, DropFlagMode::Deep) {
             DropStyle::Dead => {
                 if !is_bootstrap { //cfg!(target_arch = "x86_64") {

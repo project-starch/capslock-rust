@@ -82,7 +82,6 @@ that contains only loops and breakable blocks. It tracks where a `break`,
 */
 
 use std::mem;
-
 use crate::build::{BlockAnd, BlockAndExtension, BlockFrame, Builder, CFG};
 use rustc_data_structures::fx::FxHashMap;
 use rustc_hir::HirId;
@@ -93,6 +92,8 @@ use rustc_middle::thir::{ExprId, LintLevel};
 use rustc_session::lint::Level;
 use rustc_span::source_map::Spanned;
 use rustc_span::{Span, DUMMY_SP};
+
+pub static mut IS_BOOTSTRAP: bool = false;
 
 #[derive(Debug)]
 pub struct Scopes<'tcx> {
@@ -634,6 +635,11 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
                 self.block_context.pop();
             }
             (Some(destination), None) => {
+                let is_bootstrap: bool;
+                unsafe {is_bootstrap = IS_BOOTSTRAP;}
+                if !is_bootstrap { //cfg!(target_arch = "x86_64") {
+                    eprintln!("push_assign_unit({:?}, {:?}, {:?})", block, source_info, destination);
+                }
                 self.cfg.push_assign_unit(block, source_info, destination, self.tcx)
             }
             (None, Some(_)) => {
@@ -1175,16 +1181,43 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
         let assign_unwind = self.cfg.start_new_cleanup_block();
         self.cfg.push_assign(assign_unwind, source_info, place, value.clone());
 
-        self.cfg.terminate(
-            block,
-            source_info,
-            TerminatorKind::Drop {
-                place,
-                target: assign,
-                unwind: UnwindAction::Cleanup(assign_unwind),
-                replace: true,
-            },
-        );
+        let is_bootstrap: bool;
+        unsafe {is_bootstrap = IS_BOOTSTRAP;}
+        if !is_bootstrap { //cfg!(target_arch = "x86_64") {
+            eprintln!("Attempting to create a magic block here (it does nothing, yet)");
+            eprintln!("push_assign({:?}, {:?}, {:?}, {:?})", block, source_info, place, value);
+            let magic_block = self.cfg.start_new_block();
+            self.cfg.terminate(
+                magic_block,
+                source_info,
+                TerminatorKind::Goto {
+                    target: assign,
+                },
+            );
+
+            self.cfg.terminate(
+                block,
+                source_info,
+                TerminatorKind::Drop {
+                    place,
+                    target: magic_block,
+                    unwind: UnwindAction::Cleanup(assign_unwind),
+                    replace: true,
+                },
+            );
+        }
+        else {
+            self.cfg.terminate(
+                block,
+                source_info,
+                TerminatorKind::Drop {
+                    place,
+                    target: assign,
+                    unwind: UnwindAction::Cleanup(assign_unwind),
+                    replace: true,
+                },
+            );
+        }
         self.diverge_from(block);
 
         assign.unit()

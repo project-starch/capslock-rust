@@ -1115,6 +1115,6 @@ mod custom;
 mod expr;
 mod matches;
 mod misc;
-mod scope;
+pub mod scope;
 
 pub(crate) use expr::category::Category as ExprCategory;
