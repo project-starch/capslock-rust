@@ -39,6 +39,7 @@ use rustc_middle::mir::{
 };
 use rustc_middle::query::Providers;
 use rustc_middle::ty::{self, TyCtxt, TypeVisitableExt};
+use rustc_mir_build::build::scope::IS_BOOTSTRAP;
 use rustc_span::{source_map::Spanned, sym, DUMMY_SP};
 use rustc_trait_selection::traits;
 
@@ -111,6 +112,7 @@ mod simplify_comparison_integral;
 mod sroa;
 mod uninhabited_enum_branching;
 mod unreachable_prop;
+mod assign_capstone;
 
 use rustc_const_eval::transform::check_consts::{self, ConstCx};
 use rustc_const_eval::transform::validate;
@@ -510,6 +512,13 @@ fn run_analysis_cleanup_passes<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
         &deref_separator::Derefer,
     ];
 
+    let is_bootstrap: bool;
+    unsafe {is_bootstrap = IS_BOOTSTRAP};
+
+    if !is_bootstrap {
+        eprintln!("Running analysis cleanup passes on {:?}", body.source.def_id());
+    }
+
     pm::run_passes(tcx, body, passes, Some(MirPhase::Analysis(AnalysisPhase::PostCleanup)));
 }
 
@@ -535,6 +544,14 @@ fn run_runtime_lowering_passes<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
         &add_retag::AddRetag,
         &Lint(known_panics_lint::KnownPanicsLint),
     ];
+
+    let is_bootstrap: bool;
+    unsafe {is_bootstrap = IS_BOOTSTRAP};
+
+    if !is_bootstrap {
+        eprintln!("Running runtime lowering passes on {:?}", body.source.def_id());
+    }
+
     pm::run_passes_no_validate(tcx, body, passes, Some(MirPhase::Runtime(RuntimePhase::Initial)));
 }
 
@@ -545,6 +562,13 @@ fn run_runtime_cleanup_passes<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
         &remove_place_mention::RemovePlaceMention,
         &simplify::SimplifyCfg::ElaborateDrops,
     ];
+
+    let is_bootstrap: bool;
+    unsafe {is_bootstrap = IS_BOOTSTRAP};
+
+    if !is_bootstrap {
+        eprintln!("Running runtime cleanup passes on {:?}", body.source.def_id());
+    }
 
     pm::run_passes(tcx, body, passes, Some(MirPhase::Runtime(RuntimePhase::PostCleanup)));
 
@@ -559,71 +583,144 @@ fn run_optimization_passes<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
     fn o1<T>(x: T) -> WithMinOptLevel<T> {
         WithMinOptLevel(1, x)
     }
-
+    
     // The main optimizations that we do on MIR.
-    pm::run_passes(
-        tcx,
-        body,
-        &[
-            &check_alignment::CheckAlignment,
-            // Before inlining: trim down MIR with passes to reduce inlining work.
+    let is_bootstrap: bool;
+    unsafe {is_bootstrap = IS_BOOTSTRAP};
 
-            // Has to be done before inlining, otherwise actual call will be almost always inlined.
-            // Also simple, so can just do first
-            &lower_slice_len::LowerSliceLenCalls,
-            // Perform inlining, which may add a lot of code.
-            &inline::Inline,
-            // Code from other crates may have storage markers, so this needs to happen after inlining.
-            &remove_storage_markers::RemoveStorageMarkers,
-            // Inlining and instantiation may introduce ZST and useless drops.
-            &remove_zsts::RemoveZsts,
-            &remove_unneeded_drops::RemoveUnneededDrops,
-            // Type instantiation may create uninhabited enums.
-            &uninhabited_enum_branching::UninhabitedEnumBranching,
-            &unreachable_prop::UnreachablePropagation,
-            &o1(simplify::SimplifyCfg::AfterUninhabitedEnumBranching),
-            // Inlining may have introduced a lot of redundant code and a large move pattern.
-            // Now, we need to shrink the generated MIR.
-
-            // Has to run after `slice::len` lowering
-            &normalize_array_len::NormalizeArrayLen,
-            &ref_prop::ReferencePropagation,
-            &sroa::ScalarReplacementOfAggregates,
-            &match_branches::MatchBranchSimplification,
-            // inst combine is after MatchBranchSimplification to clean up Ne(_1, false)
-            &multiple_return_terminators::MultipleReturnTerminators,
-            &instsimplify::InstSimplify,
-            &simplify::SimplifyLocals::BeforeConstProp,
-            &dead_store_elimination::DeadStoreElimination::Initial,
-            &gvn::GVN,
-            &simplify::SimplifyLocals::AfterGVN,
-            &dataflow_const_prop::DataflowConstProp,
-            &const_debuginfo::ConstDebugInfo,
-            &o1(simplify_branches::SimplifyConstCondition::AfterConstProp),
-            &jump_threading::JumpThreading,
-            &early_otherwise_branch::EarlyOtherwiseBranch,
-            &simplify_comparison_integral::SimplifyComparisonIntegral,
-            &dest_prop::DestinationPropagation,
-            &o1(simplify_branches::SimplifyConstCondition::Final),
-            &o1(remove_noop_landing_pads::RemoveNoopLandingPads),
-            &o1(simplify::SimplifyCfg::Final),
-            &copy_prop::CopyProp,
-            &dead_store_elimination::DeadStoreElimination::Final,
-            &nrvo::RenameReturnPlace,
-            &simplify::SimplifyLocals::Final,
-            &multiple_return_terminators::MultipleReturnTerminators,
-            &deduplicate_blocks::DeduplicateBlocks,
-            &large_enums::EnumSizeOpt { discrepancy: 128 },
-            // Some cleanup necessary at least for LLVM and potentially other codegen backends.
-            &add_call_guards::CriticalCallEdges,
-            // Cleanup for human readability, off by default.
-            &prettify::ReorderBasicBlocks,
-            &prettify::ReorderLocals,
-            // Dump the end result for testing and debugging purposes.
-            &dump_mir::Marker("PreCodegen"),
-        ],
-        Some(MirPhase::Runtime(RuntimePhase::Optimized)),
-    );
+    if !is_bootstrap {
+        // eprintln!("Running optimization passes on {:?}", body.source.def_id());
+        pm::run_passes(
+            tcx,
+            body,
+            &[
+                &check_alignment::CheckAlignment,
+                // Before inlining: trim down MIR with passes to reduce inlining work.
+    
+                // Has to be done before inlining, otherwise actual call will be almost always inlined.
+                // Also simple, so can just do first
+                &lower_slice_len::LowerSliceLenCalls,
+                // Perform inlining, which may add a lot of code.
+                &inline::Inline,
+                // Code from other crates may have storage markers, so this needs to happen after inlining.
+                &remove_storage_markers::RemoveStorageMarkers,
+                // Inlining and instantiation may introduce ZST and useless drops.
+                &remove_zsts::RemoveZsts,
+                &remove_unneeded_drops::RemoveUnneededDrops,
+                // Type instantiation may create uninhabited enums.
+                &uninhabited_enum_branching::UninhabitedEnumBranching,
+                &unreachable_prop::UnreachablePropagation,
+                &o1(simplify::SimplifyCfg::AfterUninhabitedEnumBranching),
+                // Inlining may have introduced a lot of redundant code and a large move pattern.
+                // Now, we need to shrink the generated MIR.
+    
+                // Has to run after `slice::len` lowering
+                &normalize_array_len::NormalizeArrayLen,
+                &ref_prop::ReferencePropagation,
+                &sroa::ScalarReplacementOfAggregates,
+                &match_branches::MatchBranchSimplification,
+                // inst combine is after MatchBranchSimplification to clean up Ne(_1, false)
+                &multiple_return_terminators::MultipleReturnTerminators,
+                &instsimplify::InstSimplify,
+                &simplify::SimplifyLocals::BeforeConstProp,
+                &dead_store_elimination::DeadStoreElimination::Initial,
+                &gvn::GVN,
+                &simplify::SimplifyLocals::AfterGVN,
+                &dataflow_const_prop::DataflowConstProp,
+                &const_debuginfo::ConstDebugInfo,
+                &o1(simplify_branches::SimplifyConstCondition::AfterConstProp),
+                &jump_threading::JumpThreading,
+                &early_otherwise_branch::EarlyOtherwiseBranch,
+                &simplify_comparison_integral::SimplifyComparisonIntegral,
+                &dest_prop::DestinationPropagation,
+                &o1(simplify_branches::SimplifyConstCondition::Final),
+                &o1(remove_noop_landing_pads::RemoveNoopLandingPads),
+                &o1(simplify::SimplifyCfg::Final),
+                &copy_prop::CopyProp,
+                &dead_store_elimination::DeadStoreElimination::Final,
+                &nrvo::RenameReturnPlace,
+                &simplify::SimplifyLocals::Final,
+                &multiple_return_terminators::MultipleReturnTerminators,
+                &deduplicate_blocks::DeduplicateBlocks,
+                &large_enums::EnumSizeOpt { discrepancy: 128 },
+                // Some cleanup necessary at least for LLVM and potentially other codegen backends.
+                &add_call_guards::CriticalCallEdges,
+                &assign_capstone::AssignCapstone,
+                // Cleanup for human readability, off by default.
+                &prettify::ReorderBasicBlocks,
+                &prettify::ReorderLocals,
+                // Dump the end result for testing and debugging purposes.
+                &dump_mir::Marker("PreCodegen"),
+            ],
+            Some(MirPhase::Runtime(RuntimePhase::Optimized)),
+        );
+        println!("Optimization passes after runs done on {:?}", body.source.def_id());
+    }
+    else {
+        pm::run_passes(
+            tcx,
+            body,
+            &[
+                &check_alignment::CheckAlignment,
+                // Before inlining: trim down MIR with passes to reduce inlining work.
+    
+                // Has to be done before inlining, otherwise actual call will be almost always inlined.
+                // Also simple, so can just do first
+                &lower_slice_len::LowerSliceLenCalls,
+                // Perform inlining, which may add a lot of code.
+                &inline::Inline,
+                // Code from other crates may have storage markers, so this needs to happen after inlining.
+                &remove_storage_markers::RemoveStorageMarkers,
+                // Inlining and instantiation may introduce ZST and useless drops.
+                &remove_zsts::RemoveZsts,
+                &remove_unneeded_drops::RemoveUnneededDrops,
+                // Type instantiation may create uninhabited enums.
+                &uninhabited_enum_branching::UninhabitedEnumBranching,
+                &unreachable_prop::UnreachablePropagation,
+                &o1(simplify::SimplifyCfg::AfterUninhabitedEnumBranching),
+                // Inlining may have introduced a lot of redundant code and a large move pattern.
+                // Now, we need to shrink the generated MIR.
+    
+                // Has to run after `slice::len` lowering
+                &normalize_array_len::NormalizeArrayLen,
+                &ref_prop::ReferencePropagation,
+                &sroa::ScalarReplacementOfAggregates,
+                &match_branches::MatchBranchSimplification,
+                // inst combine is after MatchBranchSimplification to clean up Ne(_1, false)
+                &multiple_return_terminators::MultipleReturnTerminators,
+                &instsimplify::InstSimplify,
+                &simplify::SimplifyLocals::BeforeConstProp,
+                &dead_store_elimination::DeadStoreElimination::Initial,
+                &gvn::GVN,
+                &simplify::SimplifyLocals::AfterGVN,
+                &dataflow_const_prop::DataflowConstProp,
+                &const_debuginfo::ConstDebugInfo,
+                &o1(simplify_branches::SimplifyConstCondition::AfterConstProp),
+                &jump_threading::JumpThreading,
+                &early_otherwise_branch::EarlyOtherwiseBranch,
+                &simplify_comparison_integral::SimplifyComparisonIntegral,
+                &dest_prop::DestinationPropagation,
+                &o1(simplify_branches::SimplifyConstCondition::Final),
+                &o1(remove_noop_landing_pads::RemoveNoopLandingPads),
+                &o1(simplify::SimplifyCfg::Final),
+                &copy_prop::CopyProp,
+                &dead_store_elimination::DeadStoreElimination::Final,
+                &nrvo::RenameReturnPlace,
+                &simplify::SimplifyLocals::Final,
+                &multiple_return_terminators::MultipleReturnTerminators,
+                &deduplicate_blocks::DeduplicateBlocks,
+                &large_enums::EnumSizeOpt { discrepancy: 128 },
+                // Some cleanup necessary at least for LLVM and potentially other codegen backends.
+                &add_call_guards::CriticalCallEdges,
+                // Cleanup for human readability, off by default.
+                &prettify::ReorderBasicBlocks,
+                &prettify::ReorderLocals,
+                // Dump the end result for testing and debugging purposes.
+                &dump_mir::Marker("PreCodegen"),
+            ],
+            Some(MirPhase::Runtime(RuntimePhase::Optimized)),
+        );
+    }
 }
 
 /// Optimize the MIR and prepare it for codegen.
