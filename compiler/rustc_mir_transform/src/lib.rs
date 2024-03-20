@@ -112,7 +112,7 @@ mod simplify_comparison_integral;
 mod sroa;
 mod uninhabited_enum_branching;
 mod unreachable_prop;
-mod assign_capstone;
+mod inject_capstone;
 
 use rustc_const_eval::transform::check_consts::{self, ConstCx};
 use rustc_const_eval::transform::validate;
@@ -645,10 +645,10 @@ fn run_optimization_passes<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
                 &large_enums::EnumSizeOpt { discrepancy: 128 },
                 // Some cleanup necessary at least for LLVM and potentially other codegen backends.
                 &add_call_guards::CriticalCallEdges,
-                &assign_capstone::AssignCapstone,
                 // Cleanup for human readability, off by default.
                 &prettify::ReorderBasicBlocks,
                 &prettify::ReorderLocals,
+                &inject_capstone::InjectCapstone,
                 // Dump the end result for testing and debugging purposes.
                 &dump_mir::Marker("PreCodegen"),
             ],

@@ -249,6 +249,7 @@ impl<'tcx> MirPass<'tcx> for DestinationPropagation {
 
             apply_merges(body, tcx, &merges, &merged_locals);
         }
+        println!("Destination Propagation Rounds: {}", round_count);
 
         trace!(round_count);
     }
