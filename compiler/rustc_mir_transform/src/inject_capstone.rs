@@ -1,7 +1,7 @@
 use crate::MirPass;
 use rustc_ast::InlineAsmOptions;
 use rustc_ast::InlineAsmTemplatePiece;
-use rustc_index::Idx;
+// use rustc_index::Idx;
 // use rustc_data_structures::fx::{FxIndexMap, IndexEntry, IndexOccupiedEntry};
 // use rustc_index::bit_set::BitSet;
 // use rustc_index::interval::SparseIntervalMatrix;
@@ -11,7 +11,7 @@ use rustc_middle::mir::patch::MirPatch;
 // use rustc_middle::mir::{dump_mir, PassWhere};
 use rustc_middle::mir::{
     /*traversal,*/ Body, /*InlineAsmOperand, Local, LocalKind, Location, Operand, Place, */CastKind, Rvalue,
-    Statement, StatementKind, TerminatorKind, UnwindAction, BasicBlockData, BasicBlock,
+    Statement, StatementKind, TerminatorKind, UnwindAction, BasicBlockData, 
 };
 use rustc_middle::ty::TyCtxt;
 // use rustc_mir_dataflow::impls::MaybeLiveLocals;
@@ -25,71 +25,23 @@ static SPANS: [rustc_span::Span; 1] = [DUMMY_SP];
 impl<'tcx> MirPass<'tcx> for InjectCapstone {
     fn run_pass(&self, tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
         let mut patch = MirPatch::new(body);
-        println!("Running InjectCapstone on {:?}", body.source.def_id());
         
         // For reference, printing the contents of each basic block in the body of this function
-        for (bb, data) in body.basic_blocks_mut().into_iter().enumerate() {            
-            println!("\nBasic Block: {:?}", bb);
+        for (bb, data) in body.basic_blocks_mut().iter_enumerated_mut() {            
             for (i, stmt) in data.statements.clone().iter().enumerate() {
                 match stmt {
-                    Statement { kind: StatementKind::Assign(box (lhs, rhs)), .. } => {
-                        print!("Statement {}: Assign with LHS = {:?}, RHS = ", i, lhs);
+                    Statement { kind: StatementKind::Assign(box (_lhs, rhs)), .. } => {
                         match rhs {
-                            Rvalue::Use(operand) => {
-                                println!("Use: {:?}", operand);
-                            },
-                            Rvalue::BinaryOp(op, box (lhs, rhs)) => {
-                                println!("BinaryOp: {:?}, {:?}, {:?}", op, lhs, rhs);
-                            },
-                            Rvalue::CheckedBinaryOp(op, box (lhs, rhs)) => {
-                                println!("CheckedBinaryOp: {:?}, {:?}, {:?}", op, lhs, rhs);
-                            },
-                            Rvalue::UnaryOp(op, operand) => {
-                                println!("UnaryOp: {:?}, {:?}", op, operand);
-                            },
-                            Rvalue::Discriminant(place) => {
-                                println!("Discriminant: {:?}", place);
-                            },
-                            Rvalue::NullaryOp(op, _) => {
-                                println!("NullaryOp: {:?}", op);
-                            },
-                            Rvalue::Aggregate(_, _) => {
-                                println!("Aggregate: {:?}", rhs);
-                            },
-                            Rvalue::Repeat(operand, _) => {
-                                println!("Repeat: {:?}", operand);
-                            },
-                            Rvalue::Ref(_, _, _) => {
-                                println!("Ref: {:?}", rhs);
-                            },
-                            Rvalue::Len(_) => {
-                                println!("Len: {:?}", rhs);
-                            },
                             Rvalue::Cast(cast_type, operand, _) => {
                                 match cast_type {
                                     CastKind::PointerExposeAddress => {
-                                        println!("PointerExposeAddress: {:?}", operand);
+                                        println!("PointerExposeAddress: ");
                                     },
                                     CastKind::PointerFromExposedAddress => {
-                                        println!("PointerFromExposedAddress: {:?}", operand);
+                                        println!("PointerFromExposedAddress: ");
                                     },
-                                    CastKind::PointerCoercion(coercion) => {
-                                        println!("PointerCoercion: {:?} {:?}", coercion, operand);
-                                    },
-                                    CastKind::DynStar => {
-                                        println!("DynStar: {:?}", operand);
-                                    },
-                                    CastKind::IntToInt => {
-                                        println!("IntToInt: {:?}", operand);
-                                    },
-                                    CastKind::FloatToInt => {
-                                        println!("FloatToInt: {:?}", operand);
-                                    },
-                                    CastKind::FloatToFloat => {
-                                        println!("FloatToFloat: {:?}", operand);
-                                    },
-                                    CastKind::IntToFloat => {
-                                        println!("IntToFloat: {:?}", operand);
+                                    CastKind::PointerCoercion(_coercion) => {
+                                        println!("PointerCoercion: ");
                                     },
                                     CastKind::PtrToPtr => {
                                         let mut new_stmts = vec![];
@@ -116,7 +68,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                             unwind: UnwindAction::Continue,
                                         };
 
-                                        patch.patch_terminator(BasicBlock::new(bb), inline_terminator);
+                                        patch.patch_terminator(bb, inline_terminator);
 
                                         println!("PtrToPtr: {:?}", operand);
                                     },
@@ -126,19 +78,14 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                     CastKind::Transmute => {
                                         println!("Transmute: {:?}", operand);
                                     },
+                                    _ => (),
                                 }
                             },
                             Rvalue::AddressOf(_, _) => {
-                                println!("AddressOf: {:?}", rhs);
+                                println!("AddressOf ");
                             },
                             _ => {println!("Other non-matched Rvalue")}
                         }
-                    },
-                    Statement { kind: StatementKind::StorageLive(local), .. } => {
-                        println!("Statement {}: StorageLive {:?}", i, local);
-                    },
-                    Statement { kind: StatementKind::StorageDead(local), .. } => {
-                        println!("Statement {}: StorageDead {:?}", i, local);
                     },
                     _ => println!("Other non-matched Statement"),                }
             }
@@ -146,23 +93,8 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
             match &data.terminator {
                 Some(x) => {
                     match &x.kind {
-                        TerminatorKind::Drop { place, target, .. } => {
-                            println!("Drop: {:?}, {:?}", place, target)
-                        },
-                        TerminatorKind::Goto { target } => {
-                            println!("Goto: {:?}", target)
-                        },
-                        TerminatorKind::Return => {
-                            println!("Return: {:?}", x.kind)
-                        },
-                        TerminatorKind::Call { func, args, destination, target, unwind, call_source, fn_span } => {
-                            println!("Call: {:?}, {:?}, {:?}, {:?}, {:?}, {:?}, {:?}", func, args, destination, target, unwind, call_source, fn_span )
-                        },
-                        TerminatorKind::InlineAsm { template, operands, options, line_spans, targets, unwind } => {
-                            println!("InlineAsm: {:?}, {:?}, {:?}, {:?}, {:?}, {:?}", template, operands, options, line_spans, targets, unwind )
-                        },
-                        TerminatorKind::Assert { cond, expected, msg, target, unwind } => {
-                            println!("Assert: {:?}, {:?}, {:?}, {:?}, {:?}", cond, expected, msg, target, unwind )
+                        TerminatorKind::Drop { .. } => {
+                            println!("Drop: ")
                         },
                         _ => {println!("Other non-matched terminator")},
                     }
@@ -170,5 +102,6 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                 _ => {}
             }
         }
+        patch.apply(body);
     }
 }
