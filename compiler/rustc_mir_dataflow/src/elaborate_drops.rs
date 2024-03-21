@@ -238,7 +238,7 @@ where
                 if !is_bootstrap { //cfg!(target_arch = "x86_64") {
                     eprintln!("elaborate_drop: dead");
                     let block = TerminatorKind::InlineAsm {
-                        template: self.elaborator.tcx().arena.alloc_from_iter([InlineAsmTemplatePiece::String(".insn r 0x5b, 0x1, 0x43, x0, t0, x0".to_string())]),
+                        template: self.elaborator.tcx().arena.alloc_from_iter([InlineAsmTemplatePiece::String(".insn r 0x5b, 0x1, 0x43, x0, t1, x0".to_string())]),
                         operands: vec![],
                         options: InlineAsmOptions::empty(),
                         line_spans: &SPANS,

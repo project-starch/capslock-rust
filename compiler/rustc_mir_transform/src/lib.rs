@@ -512,13 +512,6 @@ fn run_analysis_cleanup_passes<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
         &deref_separator::Derefer,
     ];
 
-    let is_bootstrap: bool;
-    unsafe {is_bootstrap = IS_BOOTSTRAP};
-
-    if !is_bootstrap {
-        eprintln!("Running analysis cleanup passes on {:?}", body.source.def_id());
-    }
-
     pm::run_passes(tcx, body, passes, Some(MirPhase::Analysis(AnalysisPhase::PostCleanup)));
 }
 
@@ -545,13 +538,6 @@ fn run_runtime_lowering_passes<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
         &Lint(known_panics_lint::KnownPanicsLint),
     ];
 
-    let is_bootstrap: bool;
-    unsafe {is_bootstrap = IS_BOOTSTRAP};
-
-    if !is_bootstrap {
-        eprintln!("Running runtime lowering passes on {:?}", body.source.def_id());
-    }
-
     pm::run_passes_no_validate(tcx, body, passes, Some(MirPhase::Runtime(RuntimePhase::Initial)));
 }
 
@@ -562,13 +548,6 @@ fn run_runtime_cleanup_passes<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
         &remove_place_mention::RemovePlaceMention,
         &simplify::SimplifyCfg::ElaborateDrops,
     ];
-
-    let is_bootstrap: bool;
-    unsafe {is_bootstrap = IS_BOOTSTRAP};
-
-    if !is_bootstrap {
-        eprintln!("Running runtime cleanup passes on {:?}", body.source.def_id());
-    }
 
     pm::run_passes(tcx, body, passes, Some(MirPhase::Runtime(RuntimePhase::PostCleanup)));
 
@@ -648,6 +627,7 @@ fn run_optimization_passes<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
                 // Cleanup for human readability, off by default.
                 &prettify::ReorderBasicBlocks,
                 &prettify::ReorderLocals,
+                // CAPSTONE-injection pass.
                 &inject_capstone::InjectCapstone,
                 // Dump the end result for testing and debugging purposes.
                 &dump_mir::Marker("PreCodegen"),
