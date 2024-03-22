@@ -27,19 +27,15 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
         let mut patch = MirPatch::new(body);
         
         // For reference, printing the contents of each basic block in the body of this function
-        for (bb, data) in body.basic_blocks_mut().iter_enumerated_mut() {            
-            for (i, stmt) in data.statements.clone().iter().enumerate() {
+        for (bb, data) in body.basic_blocks_mut().iter_enumerated_mut() {    
+            println!("Basic Block: {}", bb.index());        
+            for (i, stmt) in data.statements.clone().iter().enumerate().rev() {
+                println!("Statement {}", i);
                 match stmt {
                     Statement { kind: StatementKind::Assign(box (_lhs, rhs)), .. } => {
                         match rhs {
                             Rvalue::Cast(cast_type, operand, _) => {
                                 match cast_type {
-                                    CastKind::PointerExposeAddress => {
-                                        println!("PointerExposeAddress: ");
-                                    },
-                                    CastKind::PointerFromExposedAddress => {
-                                        println!("PointerFromExposedAddress: ");
-                                    },
                                     CastKind::PointerCoercion(_coercion) => {
                                         println!("PointerCoercion: ");
                                     },
@@ -72,22 +68,14 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
 
                                         println!("PtrToPtr: {:?}", operand);
                                     },
-                                    CastKind::FnPtrToPtr => {
-                                        println!("FnPtrToPtr: {:?}", operand);
-                                    },
-                                    CastKind::Transmute => {
-                                        println!("Transmute: {:?}", operand);
-                                    },
                                     _ => (),
                                 }
                             },
-                            Rvalue::AddressOf(_, _) => {
-                                println!("AddressOf ");
-                            },
-                            _ => {println!("Other non-matched Rvalue")}
+                            _ => (),
                         }
                     },
-                    _ => println!("Other non-matched Statement"),                }
+                    _ => (),
+                }
             }
             
             match &data.terminator {
@@ -96,7 +84,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                         TerminatorKind::Drop { .. } => {
                             println!("Drop: ")
                         },
-                        _ => {println!("Other non-matched terminator")},
+                        _ => (),
                     }
                 },
                 _ => {}
