@@ -1,24 +1,29 @@
 use crate::MirPass;
-use rustc_ast::InlineAsmOptions;
-use rustc_ast::InlineAsmTemplatePiece;
+// use rustc_ast::InlineAsmOptions;
+// use rustc_ast::InlineAsmTemplatePiece;
 // use rustc_index::Idx;
 // use rustc_data_structures::fx::{FxIndexMap, IndexEntry, IndexOccupiedEntry};
 // use rustc_index::bit_set::BitSet;
 // use rustc_index::interval::SparseIntervalMatrix;
 // use rustc_middle::mir::visit::MutVisitor;
 use rustc_middle::mir::patch::MirPatch;
+use crate::ty::Ty;
 // use rustc_middle::mir::HasLocalDecls;
 // use rustc_middle::mir::{dump_mir, PassWhere};
 use rustc_middle::mir::{
-    /*traversal,*/ Body, /*Local, */ /*InlineAsmOperand, LocalKind, Location, Operand, Place, */CastKind, Rvalue,
-    Statement, StatementKind, TerminatorKind, UnwindAction, BasicBlockData, 
+    /*traversal,*/ Body, /*Local, */ /*InlineAsmOperand, LocalKind, Location,*/ BasicBlockData, Place, UnwindAction, CallSource, CastKind, Rvalue, 
+    Statement, StatementKind, TerminatorKind, Operand, Const, ConstValue, ConstOperand
 };
+// use crate::ty::ty_kind;
+use rustc_middle::ty;
 use rustc_middle::ty::TyCtxt;
 // use rustc_data_structures::fx::FxHashMap;
 // use rustc_mir_dataflow::impls::MaybeLiveLocals;
 // use rustc_mir_dataflow::points::{/*save_as_intervals,*/ DenseLocationMap, PointIndex};
 // use rustc_mir_dataflow::Analysis;
 
+use rustc_span::def_id::{DefId, DefIndex, CrateNum};
+use rustc_middle::ty::{List, GenericArg};
 use rustc_span::DUMMY_SP;
 static SPANS: [rustc_span::Span; 1] = [DUMMY_SP];
 
@@ -66,11 +71,11 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
         }
 
 
-        // Second, downward, loop to find the first uses of those pointers from Candidates
+        // Second, downward, loop to find the first uses of those pointers as well as their borrows
         for (_bb, data) in body.basic_blocks_mut().iter_enumerated_mut() {
             for (_i, stmt) in data.statements.iter_mut().enumerate() {
                 match stmt {
-                    Statement {kind: StatementKind::Assign(box (_lhs, rhs)), .. } => {
+                    Statement {kind: StatementKind::Assign(box (_lhs, _rhs)), .. } => {
                         // match lhs {
                         //     // Match the lvalue on LHS for all root allocations
                         //         // Upon match,
@@ -79,14 +84,14 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                         //             // Store the capabilities (or their addresses) into the AllocationCapabilities struct
                         //     _ => todo!(),
                         // };
-                        match rhs {
-                            // Match the rvalue on the RHS based on what we want
-                                // Upon match, check if the value being assigned is in the Candidates struct
-                                    // If so, inject inline asm to load the capability from memory
-                                    // Its address can be found using the two hash maps
-                                    // Use the capability to perform the operation
-                            _ => (),
-                        }
+                        // match rhs {
+                        //     // Match the rvalue on the RHS based on what we want
+                        //         // Upon match, check if the value being assigned is in the Candidates struct
+                        //             // If so, inject inline asm to load the capability from memory
+                        //             // Its address can be found using the two hash maps
+                        //             // Use the capability to perform the operation
+                        //     _ => (),
+                        // }
                     },
                     _ => (),
                 }
@@ -120,7 +125,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                 match stmt {
                     Statement { kind: StatementKind::Assign(box (_lhs, rhs)), .. } => {
                         match rhs {
-                            Rvalue::Cast(cast_type, operand, _) => {
+                            Rvalue::Cast(cast_type, _operand, _) => {
                                 match cast_type {
                                     CastKind::PointerCoercion(_coercion) => {
                                         println!("PointerCoercion: ");
@@ -135,24 +140,66 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                             }
                                         }
                                         
-                                        let inline_block = patch.new_block(BasicBlockData {
-                                            statements: new_stmts,
-                                            terminator: Some(data.terminator.as_ref().unwrap().clone()),
-                                            is_cleanup: false,
-                                        });
+                                        let inline_block;
 
-                                        let inline_terminator = TerminatorKind::InlineAsm {
-                                            template: tcx.arena.alloc_from_iter([InlineAsmTemplatePiece::String(".insn r 0x5b, 0x1, 0x43, x0, t0, x0".to_string())]),
-                                            operands: vec![],
-                                            options: InlineAsmOptions::empty(),
-                                            line_spans: &SPANS,
-                                            targets: vec![inline_block],
+                                        match &data.terminator {
+                                            Some(_x) => {
+                                                inline_block = patch.new_block(BasicBlockData {
+                                                    statements: new_stmts,
+                                                    terminator: Some(data.terminator.as_ref().unwrap().clone()),
+                                                    is_cleanup: false,
+                                                });
+                                            },
+                                            _ => {
+                                                inline_block = patch.new_block(BasicBlockData {
+                                                    statements: new_stmts,
+                                                    terminator: None,
+                                                    is_cleanup: false,
+                                                });
+                                            }
+                                        }
+
+                                        // println!("PtrToPtr: {:?}", operand);
+
+                                        let crate_num = CrateNum::new(0);
+                                        let def_index = DefIndex::from_usize(5);
+                                        let _def_id = DefId { krate: crate_num, index: def_index };
+
+                                        let _generic_args: &rustc_middle::ty::List<GenericArg<'_>> = List::empty();
+
+                                        // let tykind_ = ty::FnDef(_def_id, _generic_args);
+                                        let ty_ = Ty::new(tcx, ty::FnDef(_def_id, _generic_args));
+
+                                        let const_ = Const::Val(ConstValue::ZeroSized, ty_);
+                                        
+
+                                        let const_operand = Box::new(ConstOperand { span: SPANS[0], user_ty: None, const_: const_ });
+                                        let operand_ = Operand::Constant(const_operand);
+                                        println!("########### operand_: {:?}", operand_);
+
+                                        // let local = body.local_decls.push(LocalDecl::new(ty_, SPANS[0]));
+
+                                        let dest_place = Place {local: (1 as usize).into(), projection: List::empty()};
+
+                                        // Call a function named do_nothing present in rapture::pointer
+                                        let inline_terminator = TerminatorKind::Call {
+                                            func: operand_,
+                                            args: vec![],
+                                            destination: dest_place,
+                                            target: Some(inline_block),
                                             unwind: UnwindAction::Continue,
+                                            call_source: CallSource::Normal,
+                                            fn_span: SPANS[0],
                                         };
 
-                                        patch.patch_terminator(bb, inline_terminator);
+                                        // println!("ty_: {:?}", ty_);
+                                        // println!("destination: {:?}", dest_place);
+                                        // println!("target: {:?}", Some(inline_block));
+                                        // println!("unwind: {:?}", UnwindAction::Continue);
+                                        // println!("call_source: {:?}", CallSource::Normal);
+                                        // println!("fn_span: {:?}", SPANS[0]);
 
-                                        println!("PtrToPtr: {:?}", operand);
+                                        patch.patch_terminator(bb, inline_terminator);
                                     },
                                     _ => (),
                                 }
@@ -162,6 +209,39 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                     },
                     _ => (),
                 }
+            }
+
+            match &data.terminator {
+                Some(x) => {
+                    match &x.kind {
+                        TerminatorKind::Call{func, args, destination, target, unwind, call_source, fn_span} => {
+                            println!("func: {:?}", func);
+                            match func {
+                                Operand::Constant(c) => {
+                                    match c.const_ {
+                                        Const::Val(_constval, ty) => {
+                                            println!("const_.ty: {:?}", ty);
+                                            // ty is a FnDef variant of the enum TyKind
+                                            // FnDef holds two things DefId and GenericArgs
+
+                                            
+                                        },
+                                        _ => (),
+                                    }
+                                },
+                                _ => (),
+                            };
+                            println!("args: {:?}", args);
+                            println!("destination: {:?}, {:?}", usize::from(destination.local), destination.projection);
+                            println!("target: {:?}", target);
+                            println!("unwind: {:?}", unwind);
+                            println!("call_source: {:?}", call_source);
+                            println!("fn_span: {:?}", fn_span);
+                        },
+                        _ => (),
+                    }
+                },
+                _ => {}
             }
         }
         

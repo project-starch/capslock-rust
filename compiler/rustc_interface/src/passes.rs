@@ -531,6 +531,7 @@ fn write_out_deps(tcx: TyCtxt<'_>, outputs: &OutputFilenames, out_filenames: &[P
     }
 }
 
+#[allow(rustc::potential_query_instability)]
 fn resolver_for_lowering_raw<'tcx>(
     tcx: TyCtxt<'tcx>,
     (): (),
@@ -549,6 +550,16 @@ fn resolver_for_lowering_raw<'tcx>(
         ast_lowering: untracked_resolver_for_lowering,
     } = resolver.into_outputs();
 
+    let crate_map = untracked_resolutions.extern_crate_map.clone();
+    eprintln!("extern crate map {:?}",crate_map);
+    for crate_map_iter in crate_map.iter() {
+        let (crate_def_id, crate_num) = crate_map_iter.clone();
+        let def_id_krate = crate_def_id.clone().to_def_id().krate;
+        let def_id_index = crate_def_id.clone().to_def_id().index;
+        eprintln!("krate and index: {:?}, {:?}", def_id_krate, def_id_index);
+        eprintln!("def id and crate num:, {:?}, {:?}", crate_def_id, crate_num);
+    }
+    
     let resolutions = tcx.arena.alloc(untracked_resolutions);
     (tcx.arena.alloc(Steal::new((untracked_resolver_for_lowering, Lrc::new(krate)))), resolutions)
 }
