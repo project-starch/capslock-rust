@@ -25,19 +25,8 @@ use rustc_middle::ty::TyCtxt;
 
 use rustc_span::def_id::{DefId, DefIndex, CrateNum};
 use rustc_middle::ty::{List, GenericArg};
-use rustc_span::DUMMY_SP;
+use rustc_span::{DUMMY_SP, Symbol};
 static SPANS: [rustc_span::Span; 1] = [DUMMY_SP];
-
-// struct RootAllocations {
-//     // A map between every variable and its root allocation (identified by backpropagation)
-//     // Question: What is the ideal type for a variable idenitifier? Local? LocalDecl? String?
-//     roots: FxHashMap<Local, Local>,
-// }
-
-// struct AllocationCapabilities {
-//     // A map between a root allocation and the address of its associated capability in memory
-//     capabilities: FxHashMap<Local, usize>,
-// }
 
 pub struct InjectCapstone;
 
@@ -50,13 +39,12 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
         let return_type_2 = Ty::new(tcx, ty::Bool);
         let temp_2 = body.local_decls.push(LocalDecl::new(return_type_2, SPANS[0]));
 
-        // let root_allocations = RootAllocations {
-        //     roots: FxHashMap::default(),
-        // };
-
-        // let allocation_capabilities = AllocationCapabilities {
-        //     capabilities: FxHashMap::default(),
-        // };
+        let mut rapture_crate_number: u32 = 0;
+        let mut crate_num_flag: bool = true;
+        while crate_num_flag {
+                rapture_crate_number += 1;
+                crate_num_flag = Symbol::as_str(& tcx.crate_name(CrateNum::from_u32(rapture_crate_number))) != "rapture";
+        }
         
         // First, upward, loop to find the last assignments to pointers
         for (_bb, data) in body.basic_blocks_mut().iter_enumerated_mut().rev() {
@@ -124,10 +112,8 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
         
 
         // For reference, printing the contents of each basic block in the body of this function
-        for (bb, data) in body.basic_blocks_mut().iter_enumerated_mut() {    
-            println!("Basic Block: {}", bb.index());        
+        for (bb, data) in body.basic_blocks_mut().iter_enumerated_mut() {
             for (i, stmt) in data.statements.clone().iter().enumerate().rev() {
-                println!("Statement {}", i);
                 match stmt {
                     Statement { kind: StatementKind::Assign(box (_lhs, rhs)), .. } => {
                         match rhs {
@@ -137,6 +123,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                         println!("PointerCoercion: ");
                                     },
                                     CastKind::PtrToPtr => {
+                                        println!("Rapture crate number: {}", rapture_crate_number);
                                         let mut new_stmts = vec![];
 
                                         for (j, stmt) in data.statements.iter_mut().enumerate() {
@@ -272,29 +259,8 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
             match &data.terminator {
                 Some(x) => {
                     match &x.kind {
-                        TerminatorKind::Call{func, args, destination, target, unwind, call_source, fn_span} => {
+                        TerminatorKind::Call{func, ..} => {
                             println!("func: {:?}", func);
-                            match func {
-                                Operand::Constant(c) => {
-                                    match c.const_ {
-                                        Const::Val(_constval, ty) => {
-                                            println!("const_.ty: {:?}", ty);
-                                            // ty is a FnDef variant of the enum TyKind
-                                            // FnDef holds two things DefId and GenericArgs
-
-                                            
-                                        },
-                                        _ => (),
-                                    }
-                                },
-                                _ => (),
-                            };
-                            println!("args: {:?}", args);
-                            println!("destination: {:?}, {:?}", usize::from(destination.local), destination.projection);
-                            println!("target: {:?}", target);
-                            println!("unwind: {:?}", unwind);
-                            println!("call_source: {:?}", call_source);
-                            println!("fn_span: {:?}", fn_span);
                         },
                         _ => (),
                     }

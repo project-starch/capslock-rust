@@ -572,7 +572,6 @@ fn run_optimization_passes<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
     unsafe {should_not_inject = IS_BOOTSTRAP || is_rapture};
 
     if !should_not_inject {
-        // eprintln!("Running optimization passes on {:?}", body.source.def_id());
         pm::run_passes(
             tcx,
             body,
@@ -638,7 +637,6 @@ fn run_optimization_passes<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
             ],
             Some(MirPhase::Runtime(RuntimePhase::Optimized)),
         );
-        println!("Optimization passes after runs done on {:?}", body.source.def_id());
     }
     else {
         pm::run_passes(
