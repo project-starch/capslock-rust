@@ -4282,7 +4282,6 @@ dependencies = [
  "rustc_index",
  "rustc_macros",
  "rustc_middle",
- "rustc_mir_build",
  "rustc_span",
  "rustc_target",
  "smallvec",

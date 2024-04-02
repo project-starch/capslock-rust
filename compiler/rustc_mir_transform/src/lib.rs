@@ -39,7 +39,6 @@ use rustc_middle::mir::{
 };
 use rustc_middle::query::Providers;
 use rustc_middle::ty::{self, TyCtxt, TypeVisitableExt};
-use rustc_mir_build::build::scope::IS_BOOTSTRAP;
 use rustc_span::{source_map::Spanned, sym, DUMMY_SP, Symbol};
 use rustc_trait_selection::traits;
 
@@ -119,6 +118,8 @@ use rustc_const_eval::transform::validate;
 use rustc_mir_dataflow::rustc_peek;
 
 rustc_fluent_macro::fluent_messages! { "../messages.ftl" }
+
+pub static mut IS_BOOTSTRAP: bool = false;
 
 pub fn provide(providers: &mut Providers) {
     check_unsafety::provide(providers);

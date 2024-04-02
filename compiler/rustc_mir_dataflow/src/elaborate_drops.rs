@@ -1,5 +1,3 @@
-use rustc_ast::InlineAsmOptions;
-use rustc_ast::InlineAsmTemplatePiece;
 use rustc_hir as hir;
 use rustc_hir::lang_items::LangItem;
 use rustc_index::Idx;
@@ -9,13 +7,10 @@ use rustc_middle::traits::Reveal;
 use rustc_middle::ty::util::IntTypeExt;
 use rustc_middle::ty::GenericArgsRef;
 use rustc_middle::ty::{self, Ty, TyCtxt};
-use rustc_mir_build::build::scope::IS_BOOTSTRAP;
 use rustc_span::source_map::Spanned;
 use rustc_span::DUMMY_SP;
 use rustc_target::abi::{FieldIdx, VariantIdx, FIRST_VARIANT};
 use std::{fmt, iter};
-
-static SPANS: [rustc_span::Span; 1] = [DUMMY_SP];
 
 /// The value of an inserted drop flag.
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
@@ -230,81 +225,34 @@ where
     // and then we do not need this machinery.
     #[instrument(level = "debug")]
     pub fn elaborate_drop(&mut self, bb: BasicBlock) {
-        let is_bootstrap: bool;
-        unsafe {is_bootstrap = IS_BOOTSTRAP;}
-        
         match self.elaborator.drop_style(self.path, DropFlagMode::Deep) {
             DropStyle::Dead => {
-                if !is_bootstrap { //cfg!(target_arch = "x86_64") {
-                    eprintln!("elaborate_drop: dead");
-                    let block = TerminatorKind::InlineAsm {
-                        template: self.elaborator.tcx().arena.alloc_from_iter([InlineAsmTemplatePiece::String(".insn r 0x5b, 0x1, 0x43, x0, t1, x0".to_string())]),
-                        operands: vec![],
-                        options: InlineAsmOptions::empty(),
-                        line_spans: &SPANS,
-                        targets: vec![self.succ],
-                        unwind: self.unwind.into_action(),
-                    };
-                    let test_block = self.new_block(self.unwind, block);
-                    
-                    self.elaborator
-                        .patch()
-                        .patch_terminator(bb, TerminatorKind::Goto { target: test_block });
-                }
-                else {
-                    self.elaborator
-                        .patch()
-                        .patch_terminator(bb, TerminatorKind::Goto { target: self.succ });
-                }
+                self.elaborator
+                    .patch()
+                    .patch_terminator(bb, TerminatorKind::Goto { target: self.succ });
             }
             DropStyle::Static => {
-                if !is_bootstrap {
-                    eprintln!("elaborate_drop: static");
-                }
-                let test_block = self.goto_block(self.succ, self.unwind);
-                //let loca : Location = Location {block: test_block, statement_index: 0};
-                //self.elaborator
-                //    .patch()
-                //    .add_statement(loca, StatementKind::ConstEvalCounter);
-                self.elaborator
-                    .patch()
-                    .patch_terminator(
-                        bb,
-                        TerminatorKind::Drop {
-                            place: self.place,
-                            target: test_block,
-                            unwind: self.unwind.into_action(),
-                            replace: false,
-                        },
-                    );
+                self.elaborator.patch().patch_terminator(
+                    bb,
+                    TerminatorKind::Drop {
+                        place: self.place,
+                        target: self.succ,
+                        unwind: self.unwind.into_action(),
+                        replace: false,
+                    },
+                );
             }
             DropStyle::Conditional => {
-                if !is_bootstrap {
-                    eprintln!("elaborate_drop: conditional");
-                }
                 let drop_bb = self.complete_drop(self.succ, self.unwind);
-                let test_block = self.goto_block(drop_bb, self.unwind);
-                //let loca : Location = Location {block: test_block, statement_index: 0};
-                //self.elaborator
-                //    .patch()
-                //    .add_statement(loca, StatementKind::ConstEvalCounter);
                 self.elaborator
                     .patch()
-                    .patch_terminator(bb, TerminatorKind::Goto { target: test_block });
+                    .patch_terminator(bb, TerminatorKind::Goto { target: drop_bb });
             }
             DropStyle::Open => {
-                if !is_bootstrap {
-                    eprintln!("elaborate_drop: open");
-                }
                 let drop_bb = self.open_drop();
-                let test_block = self.goto_block(drop_bb, self.unwind);
-                //let loca : Location = Location {block: test_block, statement_index: 0};
-                //self.elaborator
-                //    .patch()
-                //    .add_statement(loca, StatementKind::ConstEvalCounter);
                 self.elaborator
                     .patch()
-                    .patch_terminator(bb, TerminatorKind::Goto { target: test_block });
+                    .patch_terminator(bb, TerminatorKind::Goto { target: drop_bb });
             }
         }
     }

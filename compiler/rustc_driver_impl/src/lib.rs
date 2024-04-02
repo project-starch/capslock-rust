@@ -44,7 +44,7 @@ use rustc_span::symbol::sym;
 use rustc_span::FileName;
 use rustc_target::json::ToJson;
 use rustc_target::spec::{Target, TargetTriple};
-use rustc_mir_build::build::scope::IS_BOOTSTRAP;
+use rustc_mir_transform::IS_BOOTSTRAP;
 
 use std::cmp::max;
 use std::collections::BTreeMap;
@@ -1516,7 +1516,7 @@ pub fn main() -> ! {
         }
 
         if !IS_BOOTSTRAP {
-            eprintln!("Compiling using CAPSTONE-Rust custom compiler (v0.75)");
+            eprintln!("Compiling using CAPSTONE-Rust custom compiler (v0.8)");
         }
     }
 

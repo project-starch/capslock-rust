@@ -8,10 +8,11 @@ use crate::MirPass;
 // use rustc_middle::mir::visit::MutVisitor;
 use rustc_middle::mir::patch::MirPatch;
 use crate::ty::Ty;
+use crate::Spanned;
 // use rustc_middle::mir::HasLocalDecls;
 // use rustc_middle::mir::{dump_mir, PassWhere};
 use rustc_middle::mir::{
-    /*traversal,*/ Body, /*Local, */ /*InlineAsmOperand, LocalKind, Location,*/ BasicBlockData, Place, UnwindAction, CallSource, CastKind, Rvalue, 
+    /*traversal,*/ Body, LocalDecl, /*Local, */ /*InlineAsmOperand, LocalKind, Location,*/ BasicBlockData, Place, UnwindAction, CallSource, CastKind, Rvalue, 
     Statement, StatementKind, TerminatorKind, Operand, Const, ConstValue, ConstOperand
 };
 // use crate::ty::ty_kind;
@@ -43,6 +44,11 @@ pub struct InjectCapstone;
 impl<'tcx> MirPass<'tcx> for InjectCapstone {
     fn run_pass(&self, tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
         let mut patch = MirPatch::new(body);
+
+        let return_type_1 = Ty::new(tcx, ty::Bool);
+        let temp_1 = body.local_decls.push(LocalDecl::new(return_type_1, SPANS[0]));
+        let return_type_2 = Ty::new(tcx, ty::Bool);
+        let temp_2 = body.local_decls.push(LocalDecl::new(return_type_2, SPANS[0]));
 
         // let root_allocations = RootAllocations {
         //     roots: FxHashMap::default(),
@@ -161,8 +167,8 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
 
                                         // println!("PtrToPtr: {:?}", operand);
 
-                                        let crate_num = CrateNum::new(20);
-                                        let def_index = DefIndex::from_usize(63);
+                                        let crate_num = CrateNum::new(0);
+                                        let def_index = DefIndex::from_usize(6);
                                         let _def_id = DefId { krate: crate_num, index: def_index };
 
                                         let _generic_args: &rustc_middle::ty::List<GenericArg<'_>> = List::empty();
@@ -178,7 +184,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
 
                                         // let local = body.local_decls.push(LocalDecl::new(ty_, SPANS[0]));
 
-                                        let dest_place = Place {local: (1 as usize).into(), projection: List::empty()};
+                                        let dest_place = Place {local: (temp_1).into(), projection: List::empty()};
 
                                         // Call a function named do_nothing present in rapture::pointer
                                         let inline_terminator = TerminatorKind::Call {
@@ -192,13 +198,66 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                         };
 
                                         // println!("ty_: {:?}", ty_);
-                                        // println!("destination: {:?}", dest_place);
+                                        println!("destination: {:?}", dest_place);
                                         // println!("target: {:?}", Some(inline_block));
                                         // println!("unwind: {:?}", UnwindAction::Continue);
                                         // println!("call_source: {:?}", CallSource::Normal);
                                         // println!("fn_span: {:?}", SPANS[0]);
 
+                                        
+
+                                        // SECOND BLOCK!!
+                                        let inline_block_2 = patch.new_block(BasicBlockData {
+                                                    statements: vec![],
+                                                    terminator: Some(data.terminator.as_ref().unwrap().clone()),
+                                                    is_cleanup: false,
+                                                });
+
+                                        // println!("PtrToPtr: {:?}", operand);
+
+                                        let crate_num1 = CrateNum::new(0);
+                                        let def_index1 = DefIndex::from_usize(7);
+                                        let _def_id1 = DefId { krate: crate_num1, index: def_index1 };
+
+                                        let _generic_args1: &rustc_middle::ty::List<GenericArg<'_>> = List::empty();
+
+                                        // let tykind_ = ty::FnDef(_def_id, _generic_args);
+                                        let ty_1 = Ty::new(tcx, ty::FnDef(_def_id1, _generic_args1));
+
+                                        let const_1 = Const::Val(ConstValue::ZeroSized, ty_1);
+                                        
+                                        let const_operand1 = Box::new(ConstOperand { span: SPANS[0], user_ty: None, const_: const_1 });
+                                        let operand_1 = Operand::Constant(const_operand1);
+                                        println!("########### operand_: {:?}", operand_1);
+
+                                        // let local = body.local_decls.push(LocalDecl::new(ty_, SPANS[0]));
+
+                                        let dest_place1 = Place {local: (temp_2).into(), projection: List::empty()};
+
+                                        let operand_input = Operand::Copy(dest_place);
+                                        let spanned_operand = Spanned { span: SPANS[0], node: operand_input };
+
+                                        // Call a function named just_print and pass the temp_1 as an argument
+                                        let inline_terminator1 = TerminatorKind::Call {
+                                            func: operand_1,
+                                            args: vec![spanned_operand],
+                                            destination: dest_place1,
+                                            target: Some(inline_block_2),
+                                            unwind: UnwindAction::Continue,
+                                            call_source: CallSource::Normal,
+                                            fn_span: SPANS[0],
+                                        };
+
+                                        // println!("ty_: {:?}", ty_);
+                                        println!("destination: {:?}", dest_place1);
+                                        // println!("target: {:?}", Some(inline_block));
+                                        // println!("unwind: {:?}", UnwindAction::Continue);
+                                        // println!("call_source: {:?}", CallSource::Normal);
+                                        // println!("fn_span: {:?}", SPANS[0]);
                                         patch.patch_terminator(bb, inline_terminator);
+                                        patch.patch_terminator(inline_block, inline_terminator1);
+
+                                        
                                     },
                                     _ => (),
                                 }
