@@ -28,7 +28,7 @@ use rustc_data_structures::fx::FxIndexSet;
 use rustc_data_structures::steal::Steal;
 use rustc_hir as hir;
 use rustc_hir::def::DefKind;
-use rustc_hir::def_id::LocalDefId;
+use rustc_hir::def_id::{LocalDefId, CrateNum};
 use rustc_hir::intravisit::{self, Visitor};
 use rustc_index::IndexVec;
 use rustc_middle::mir::visit::Visitor as _;
@@ -40,7 +40,7 @@ use rustc_middle::mir::{
 use rustc_middle::query::Providers;
 use rustc_middle::ty::{self, TyCtxt, TypeVisitableExt};
 use rustc_mir_build::build::scope::IS_BOOTSTRAP;
-use rustc_span::{source_map::Spanned, sym, DUMMY_SP};
+use rustc_span::{source_map::Spanned, sym, DUMMY_SP, Symbol};
 use rustc_trait_selection::traits;
 
 #[macro_use]
@@ -563,11 +563,14 @@ fn run_optimization_passes<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
         WithMinOptLevel(1, x)
     }
     
+    // Find the name of the crate we are compiling.
+    let crate_num = CrateNum::from_u32(0);
+    let is_rapture: bool = Symbol::as_str(& tcx.crate_name(crate_num)) == "rapture";
     // The main optimizations that we do on MIR.
-    let is_bootstrap: bool;
-    unsafe {is_bootstrap = IS_BOOTSTRAP};
+    let should_not_inject: bool;
+    unsafe {should_not_inject = IS_BOOTSTRAP || is_rapture};
 
-    if !is_bootstrap {
+    if !should_not_inject {
         // eprintln!("Running optimization passes on {:?}", body.source.def_id());
         pm::run_passes(
             tcx,

@@ -161,8 +161,8 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
 
                                         // println!("PtrToPtr: {:?}", operand);
 
-                                        let crate_num = CrateNum::new(0);
-                                        let def_index = DefIndex::from_usize(5);
+                                        let crate_num = CrateNum::new(20);
+                                        let def_index = DefIndex::from_usize(63);
                                         let _def_id = DefId { krate: crate_num, index: def_index };
 
                                         let _generic_args: &rustc_middle::ty::List<GenericArg<'_>> = List::empty();
@@ -172,7 +172,6 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
 
                                         let const_ = Const::Val(ConstValue::ZeroSized, ty_);
                                         
-
                                         let const_operand = Box::new(ConstOperand { span: SPANS[0], user_ty: None, const_: const_ });
                                         let operand_ = Operand::Constant(const_operand);
                                         println!("########### operand_: {:?}", operand_);
