@@ -12,13 +12,13 @@ use crate::Spanned;
 // use rustc_middle::mir::HasLocalDecls;
 // use rustc_middle::mir::{dump_mir, PassWhere};
 use rustc_middle::mir::{
-    /*traversal,*/ Body, LocalDecl, /*Local, */ /*InlineAsmOperand, LocalKind, Location,*/ BasicBlockData, Place, UnwindAction, CallSource, CastKind, Rvalue, 
+    /*traversal,*/ Body, LocalDecl, Local, InlineAsmOperand, /*LocalKind, Location,*/ BasicBlockData, Place, UnwindAction, CallSource, CastKind, Rvalue, 
     Statement, StatementKind, TerminatorKind, Operand, Const, ConstValue, ConstOperand
 };
 // use crate::ty::ty_kind;
-use rustc_middle::ty;
+use rustc_middle::ty::{self};
 use rustc_middle::ty::TyCtxt;
-// use rustc_data_structures::fx::FxHashMap;
+use rustc_data_structures::fx::FxHashMap;
 // use rustc_mir_dataflow::impls::MaybeLiveLocals;
 // use rustc_mir_dataflow::points::{/*save_as_intervals,*/ DenseLocationMap, PointIndex};
 // use rustc_mir_dataflow::Analysis;
@@ -30,9 +30,258 @@ static SPANS: [rustc_span::Span; 1] = [DUMMY_SP];
 
 pub struct InjectCapstone;
 
+fn handle_operands(alloc_roots: &mut Vec<Local>, tracked_locals: &mut Vec<Local>, operand: &Operand<'_>, lhs: &Place<'_>) {
+    match operand {
+        &Operand::Copy(place) | &Operand::Move(place) => {
+            if !tracked_locals.contains(&place.local){
+                tracked_locals.push(place.local.clone());
+            }
+        },
+        &Operand::Constant(_) => {
+            if !alloc_roots.contains(&lhs.local) {
+                alloc_roots.push(lhs.local.clone());
+            }
+        },
+    }
+}
+
 impl<'tcx> MirPass<'tcx> for InjectCapstone {
     fn run_pass(&self, tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
         let mut patch = MirPatch::new(body);
+
+        let mut rapture_crate_number: u32 = 0;
+        let mut crate_num_flag: bool = true;
+        while crate_num_flag {
+            rapture_crate_number += 1;
+            crate_num_flag = Symbol::as_str(& tcx.crate_name(CrateNum::from_u32(rapture_crate_number))) != "rapture";
+        }
+        
+        // First, upward, loop to find the last assignments to pointers
+        let mut alloc_roots: Vec<Local> = vec![];
+        let mut tracked_locals: Vec<Local> = vec![];
+        for (_bb, data) in body.basic_blocks_mut().iter_enumerated_mut().rev() {
+            for (_i, stmt) in data.statements.iter_mut().enumerate().rev() {
+                match stmt {
+                    Statement { kind: StatementKind::Assign(box (lhs, rhs)), .. } => {
+                        match rhs {
+                            // Match the rvalue on the RHS based on what we want
+                            // To be written (Fangqi is working on this)
+                            // Once found, run backprop to locate the root of those assigned values (lhs)
+                            // Add that assigned value and the root to the RootAllocations struct
+                            Rvalue::Cast(cast_type, operand, ty) => {
+                                println!("Cast Operands : {:?} , and types: {:?}", operand, ty);
+                                if tracked_locals.contains(&lhs.local) {
+                                    handle_operands(&mut alloc_roots, &mut tracked_locals, &operand, &lhs);
+                                }
+                                match cast_type {                                    
+                                    CastKind::PointerExposeAddress => {
+                                        println!("PointerExposeAddress: ");
+                                    },
+                                    CastKind::PointerFromExposedAddress => {
+                                        println!("PointerFromExposedAddress: ");
+                                    },
+                                    CastKind::PointerCoercion(_coercion) => {
+                                        println!("PointerCoercion: ");
+                                    },
+                                    CastKind::PtrToPtr => {
+                                        match operand {
+                                            Operand::Copy(place) => {
+                                                println!("PtrToPtr Operands on Copy: {:?} , and types: {:?}", place, ty);
+                                            },
+                                            Operand::Move(place) => {
+                                                println!("PtrToPtr Operands on Move: {:?} , and types: {:?}", place, ty);
+                                            },
+                                            Operand::Constant(boxed_constant) => {
+                                                println!("PtrToPtr Operands on Constant: {:?} , and types: {:?}", boxed_constant, ty);
+                                            },
+                                        }
+                                        handle_operands(&mut alloc_roots, &mut tracked_locals, &operand, &lhs);
+                                    },
+                                    CastKind::FnPtrToPtr => {
+                                        println!("FnPtrToPtr: {:?}", operand);
+                                    },
+                                    CastKind::Transmute => {
+                                        println!("Transmute: {:?}", operand);
+                                    },
+                                    _ => (),
+                                }
+                            },
+                            Rvalue::Aggregate( .., operands) => {
+                                println!("Aggregate Operands : {:?}", operands);
+                                if tracked_locals.contains(&lhs.local) {
+                                    for operand in operands.iter(){
+                                        handle_operands(&mut alloc_roots, &mut tracked_locals, &operand, &lhs);
+                                    }
+                                }
+                            },
+                            Rvalue::BinaryOp(  .., boxed_operands) | Rvalue::CheckedBinaryOp( .., boxed_operands) => {
+                                let (first, second) = *(boxed_operands.clone());
+                                if tracked_locals.contains(&lhs.local) {
+                                    handle_operands(&mut alloc_roots, &mut tracked_locals, &first, &lhs);
+                                    handle_operands(&mut alloc_roots, &mut tracked_locals, &second, &lhs);
+                                }
+                                match first {
+                                    Operand::Copy(place) => {
+                                        print!("BinaryOp Operands on Copy: {:?} , ", place);
+                                    },
+                                    Operand::Move(place) => {
+                                        print!("BinaryOp Operands on Move: {:?} , ", place);
+                                    },
+                                    Operand::Constant(boxed_constant) => {
+                                        print!("BinaryOp Operands on Constant: {:?} , ", boxed_constant);
+                                    },
+                                }
+                                match second {
+                                    Operand::Copy(place) => {
+                                        println!(" Copy: {:?}", place);
+                                    },
+                                    Operand::Move(place) => {
+                                        println!(" Move: {:?}", place);
+                                    },
+                                    Operand::Constant(boxed_constant) => {
+                                        println!(" Constant: {:?}", boxed_constant);
+                                    },
+                                }
+                            },
+                            Rvalue::AddressOf(.., place) => {
+                                println!("AddressOf Operand (Place): {:?}, local of place: {:?}, projection list: {:?}", place, place.local, place.projection);
+                                if tracked_locals.contains(&lhs.local) && !tracked_locals.contains(&place.local){
+                                    tracked_locals.push(place.local.clone());
+                                }
+                            },
+                            Rvalue::CopyForDeref(place) => {
+                                println!("CopyForDeref Operand (Place): {:?}", place);
+                                if tracked_locals.contains(&lhs.local) && !tracked_locals.contains(&place.local){
+                                    tracked_locals.push(place.local.clone());
+                                }
+                            },
+                            Rvalue::Discriminant(place) => {
+                                println!("Discriminant Operand (Place): {:?}", place);
+                                if tracked_locals.contains(&lhs.local) && !tracked_locals.contains(&place.local){
+                                    tracked_locals.push(place.local.clone());
+                                }
+                            },
+                            Rvalue::Len(place) => {
+                                println!("Len Operand (Place): {:?}", place);
+                                if tracked_locals.contains(&lhs.local) && !tracked_locals.contains(&place.local){
+                                    tracked_locals.push(place.local.clone());
+                                }
+                            },
+                            Rvalue::Ref(.., place) => {
+                                println!("Ref Operand (Place): {:?}", place);
+                                if tracked_locals.contains(&lhs.local) && !tracked_locals.contains(&place.local){
+                                    tracked_locals.push(place.local.clone());
+                                }
+                            },
+                            Rvalue::Repeat(operand, ..) => {
+                                if tracked_locals.contains(&lhs.local) {
+                                    handle_operands(&mut alloc_roots, &mut tracked_locals, &operand, &lhs);
+                                }
+                                match operand {
+                                    Operand::Copy(place) => {
+                                        println!("Repeat Operand on Copy: {:?}", place);
+                                    },
+                                    Operand::Move(place) => {
+                                        println!("Repeat Operand on Move: {:?}", place);
+                                    },
+                                    Operand::Constant(boxed_constant) => {
+                                        println!("Repeat Operand on Constant: {:?}", boxed_constant);
+                                    },
+                                }
+                            },
+                            Rvalue::ShallowInitBox(operand, ty) => {
+                                if tracked_locals.contains(&lhs.local) {
+                                    handle_operands(&mut alloc_roots, &mut tracked_locals, &operand, &lhs);
+                                }
+                                match operand {
+                                    Operand::Copy(place) => {
+                                        println!("ShallowInitBox Operands on Copy: {:?} , and types: {:?}", place, ty);
+                                    },
+                                    Operand::Move(place) => {
+                                        println!("ShallowInitBox Operands on Move: {:?} , and types: {:?}", place, ty);
+                                    },
+                                    Operand::Constant(boxed_constant) => {
+                                        println!("ShallowInitBox Operands on Constant: {:?} , and types: {:?}", boxed_constant, ty);
+                                    },
+                                }
+                            },
+                            Rvalue::UnaryOp(.., operand) => {
+                                if tracked_locals.contains(&lhs.local) {
+                                    handle_operands(&mut alloc_roots, &mut tracked_locals, &operand, &lhs);
+                                }
+                                match operand {
+                                    Operand::Copy(place) => {
+                                        println!("UnaryOp Operand on Copy: {:?}", place);
+                                    },
+                                    Operand::Move(place) => {
+                                        println!("UnaryOp Operand on Move: {:?}", place);
+                                    },
+                                    Operand::Constant(boxed_constant) => {
+                                        println!("UnaryOp Operand on Constant: {:?}", boxed_constant);
+                                    },
+                                }
+                            },
+                            Rvalue::Use(operand) => {
+                                if tracked_locals.contains(&lhs.local) {
+                                    handle_operands(&mut alloc_roots, &mut tracked_locals, &operand, &lhs);
+                                }
+                                match operand {
+                                    Operand::Copy(place) => {
+                                        println!("Use Operand on Copy: {:?}", place);
+                                    },
+                                    Operand::Move(place) => {
+                                        println!("Use Operand on Move: {:?}", place);
+                                    },
+                                    Operand::Constant(boxed_constant) => {
+                                        println!("Use Operand on Constant: {:?}", boxed_constant);
+                                    },
+                                }
+                            },
+                            _ => (),
+                        }
+                    },
+                    _ => (),
+                }
+            }
+            match &data.terminator {
+                Some(x) => {
+                    match &x.kind {
+                        TerminatorKind::Call { destination, .. } => {
+                            if tracked_locals.contains(&(destination.local)) && !alloc_roots.contains(&(destination.local)) {
+                                alloc_roots.push(destination.local.clone());
+                            }
+                        },
+                        TerminatorKind::Yield { resume_arg, .. } => {
+                            if tracked_locals.contains(&(resume_arg.local)) && !alloc_roots.contains(&(resume_arg.local)) {
+                                alloc_roots.push(resume_arg.local.clone());
+                            }
+                        },
+                        TerminatorKind::InlineAsm { operands, .. } => {
+                            for asm_operand in operands.iter(){
+                                match asm_operand {
+                                    &InlineAsmOperand::Out { place, .. } => {
+                                        match place {
+                                            Some(asm_place) => {
+                                                if tracked_locals.contains(&asm_place.local) && !alloc_roots.contains(&asm_place.local) {
+                                                    alloc_roots.push(asm_place.local.clone());
+                                                }
+                                            },
+                                            _ => (),
+                                        }
+                                    },
+                                    _ => (),
+                                }
+                            }
+                        },
+                        _ => (),
+                    }
+                },
+                _ => (),
+            }
+        }
+
+        println!("***********************found roots: {:?}", alloc_roots);
+        println!("***********************tracked tmps: {:?}", tracked_locals);
 
         // Creating a fixed number of temporary variables of fixed type to be used by our injected functions
         let return_type_1 = Ty::new(tcx, ty::Bool);
@@ -40,53 +289,54 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
         let return_type_2 = Ty::new(tcx, ty::Bool);
         let temp_2 = body.local_decls.push(LocalDecl::new(return_type_2, SPANS[0]));
 
-        let mut rapture_crate_number: u32 = 0;
-        let mut crate_num_flag: bool = true;
-        while crate_num_flag {
-                rapture_crate_number += 1;
-                crate_num_flag = Symbol::as_str(& tcx.crate_name(CrateNum::from_u32(rapture_crate_number))) != "rapture";
-        }
-        
-        // First, upward, loop to find the last assignments to pointers
-        for (_bb, data) in body.basic_blocks_mut().iter_enumerated_mut().rev() {
-            for (_i, stmt) in data.statements.iter_mut().enumerate().rev() {
-                match stmt {
-                    Statement { kind: StatementKind::Assign(box (_lhs, rhs)), .. } => {
-                        match rhs {
-                            // Match the rvalue on the RHS based on what we want
-                            // To be written (Fangqi is working on this)
-                                // Once found, run backprop to locate the root of those assigned values (lhs)
-                                // Add that assigned value and the root to the RootAllocations struct
-                            _ => (),
-                        }
-                    },
-                    _ => (),
-                }
-            }
+        // Creating temporaries for each of the roots that we have found
+        let mut root_temps: FxHashMap<Local, Local> = FxHashMap::default();
+        for root in alloc_roots.iter() {
+            let root_type = body.local_decls[*root].ty.clone();
+            println!("root and type: {:?}; {:?}", root, root_type);
+            let temp = body.local_decls.push(LocalDecl::new(root_type, SPANS[0]));
+            root_temps.insert(*root, temp);
         }
 
+        // Print the def_id
+        match body.local_decls[(1 as usize).into()].ty.kind() {
+            ty::Adt(def, _) => {
+                println!("def: {:?}", def.did());
+            },
+            _ => (),
+        }
+        // Create a Ty::Adt for the RaptureCell type that we are going to use, ie., MutDLTBoundedPtr
+        // Use the function mk_adt_def to create the AdtDef for the RaptureCell type
+        let def_id = DefId { krate: CrateNum::new(20), index: DefIndex::from_usize(84) };
+        // let adt_type = Ty::new(tcx, ty::Adt(tcx.mk_adt_def(def_id, AdtKind::Struct, IndexVec{raw: List::empty(), _marker: PhantomData}, ReprOptions{int: None, align: None, pack: None, flags: (0 as u8).into(), field_shuffle_seed: 0 as u64}, false)));
+        let adt_type = tcx.adt_def(def_id);
+        println!("adt_type: {:?}", adt_type);
 
-        // Second, downward, loop to find the first uses of those pointers as well as their borrows
+        // Create a set of locals that hold the Local for each root allocation from alloc_roots
+        let root_allocations: FxHashMap<Local, Local> = alloc_roots.iter().map(|x| (*x, *x)).collect();
+
+        // Second, downward, loop to find the first uses of those pointers as well as track their borrows
         for (_bb, data) in body.basic_blocks_mut().iter_enumerated_mut() {
             for (_i, stmt) in data.statements.iter_mut().enumerate() {
                 match stmt {
-                    Statement {kind: StatementKind::Assign(box (_lhs, _rhs)), .. } => {
-                        // match lhs {
-                        //     // Match the lvalue on LHS for all root allocations
-                        //         // Upon match,
-                        //             // Inject inline asm here to GENerate the CAPabilities for those roots
-                        //             // Store the capabilities in memory (take inspiration from library solution)
-                        //             // Store the capabilities (or their addresses) into the AllocationCapabilities struct
-                        //     _ => todo!(),
-                        // };
-                        // match rhs {
-                        //     // Match the rvalue on the RHS based on what we want
-                        //         // Upon match, check if the value being assigned is in the Candidates struct
-                        //             // If so, inject inline asm to load the capability from memory
-                        //             // Its address can be found using the two hash maps
-                        //             // Use the capability to perform the operation
-                        //     _ => (),
-                        // }
+                    Statement {kind: StatementKind::Assign(box (lhs, _rhs)), .. } => {
+                        match lhs {
+                            Place { local, .. } => {
+                                // Check if the local is in the root_allocations set
+                                if root_allocations.contains_key(&local) {
+                                    // Make the RaptureCell function call for generating the capability
+                                    // Store the capability into the local temporary that we have created for this root
+                                    // Store a mapping of this allocation and its capability (or its address) 
+                                    println!("local: {:?}", local);
+                                }
+                                // match &body.local_decls[local].ty.kind {
+                                //     ty::Ref(_, ty, _) => {
+                                //         println!("ty: {:?}", ty);
+                                //     },
+                                //     _ => (),
+                                // }
+                            }
+                        }
                     },
                     _ => (),
                 }
@@ -113,7 +363,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
         
 
         // For reference, printing the contents of each basic block in the body of this function
-        for (bb, data) in body.basic_blocks_mut().iter_enumerated_mut() {
+        for (_bb, data) in body.basic_blocks_mut().iter_enumerated_mut() {
             for (i, stmt) in data.statements.clone().iter().enumerate().rev() {
                 match stmt {
                     Statement { kind: StatementKind::Assign(box (_lhs, rhs)), .. } => {
@@ -174,7 +424,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                         println!("########### operand_: {:?}", operand_);
 
                                         // Create a block terminator that will execute the function call we want to inject
-                                        let intermediary_terminator = TerminatorKind::Call {
+                                        let _intermediary_terminator = TerminatorKind::Call {
                                             func: operand_,
                                             args: vec![],
                                             destination: dest_place,
@@ -185,7 +435,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                         };
 
                                         // The current basic block's terminator is now replaced with the one we just created (which shifts the control flow to the intermediary block)
-                                        patch.patch_terminator(bb, intermediary_terminator);
+                                        // patch.patch_terminator(bb, intermediary_terminator);
 
                                         //// DEBUG PRINTS
                                         // println!("ty_: {:?}", ty_);
@@ -224,7 +474,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                         let spanned_operand = Spanned { span: SPANS[0], node: operand_input };
 
                                         // Create a block terminator that will execute the function call we want to inject
-                                        let intermediary_terminator_2 = TerminatorKind::Call {
+                                        let _intermediary_terminator_2 = TerminatorKind::Call {
                                             func: operand_2,
                                             args: vec![spanned_operand],
                                             destination: dest_place_2,
@@ -235,7 +485,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                         };
 
                                         // The intermediary block is now made to point to the second intermediary block by virtue of its new terminator
-                                        patch.patch_terminator(intermediary_block, intermediary_terminator_2);
+                                        // patch.patch_terminator(intermediary_block, intermediary_terminator_2);
 
                                         //// DEBUG PRINTS
                                         // println!("ty_: {:?}", ty_);
