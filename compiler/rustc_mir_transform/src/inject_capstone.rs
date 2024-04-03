@@ -34,6 +34,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
     fn run_pass(&self, tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
         let mut patch = MirPatch::new(body);
 
+        // Creating a fixed number of temporary variables of fixed type to be used by our injected functions
         let return_type_1 = Ty::new(tcx, ty::Bool);
         let temp_1 = body.local_decls.push(LocalDecl::new(return_type_1, SPANS[0]));
         let return_type_2 = Ty::new(tcx, ty::Bool);
@@ -124,8 +125,9 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                     },
                                     CastKind::PtrToPtr => {
                                         println!("Rapture crate number: {}", rapture_crate_number);
+                                        
+                                        // Shift all the statements beyond our target statement to a new vector and clear them from the original block
                                         let mut new_stmts = vec![];
-
                                         for (j, stmt) in data.statements.iter_mut().enumerate() {
                                             if j > i {
                                                 new_stmts.push(stmt.clone());
@@ -133,18 +135,20 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                             }
                                         }
                                         
-                                        let inline_block;
+                                        // Create an intermediary block that will be inserted between the current block and the next block
+                                        let intermediary_block;
 
+                                        // This block has to point to the next block in the control flow graph (that terminator is an Option type)
                                         match &data.terminator {
                                             Some(_x) => {
-                                                inline_block = patch.new_block(BasicBlockData {
+                                                intermediary_block = patch.new_block(BasicBlockData {
                                                     statements: new_stmts,
                                                     terminator: Some(data.terminator.as_ref().unwrap().clone()),
                                                     is_cleanup: false,
                                                 });
                                             },
                                             _ => {
-                                                inline_block = patch.new_block(BasicBlockData {
+                                                intermediary_block = patch.new_block(BasicBlockData {
                                                     statements: new_stmts,
                                                     terminator: None,
                                                     is_cleanup: false,
@@ -152,99 +156,94 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                             }
                                         }
 
-                                        // println!("PtrToPtr: {:?}", operand);
-
+                                        // Here we determine which function to target for the injection, using its crate number and definition index (which are statically fixed)
                                         let crate_num = CrateNum::new(0);
                                         let def_index = DefIndex::from_usize(6);
                                         let _def_id = DefId { krate: crate_num, index: def_index };
 
-                                        let _generic_args: &rustc_middle::ty::List<GenericArg<'_>> = List::empty();
+                                        // The function may have generic types as its parameters. These need to be statically mentioned if we are injecting a call to it
+                                        let _generic_args: &rustc_middle::ty::List<GenericArg<'_>> = List::empty(); 
 
-                                        // let tykind_ = ty::FnDef(_def_id, _generic_args);
+                                        // Creating the sugar of all the structures for the function type to be injected
                                         let ty_ = Ty::new(tcx, ty::FnDef(_def_id, _generic_args));
-
                                         let const_ = Const::Val(ConstValue::ZeroSized, ty_);
-                                        
                                         let const_operand = Box::new(ConstOperand { span: SPANS[0], user_ty: None, const_: const_ });
                                         let operand_ = Operand::Constant(const_operand);
-                                        println!("########### operand_: {:?}", operand_);
-
-                                        // let local = body.local_decls.push(LocalDecl::new(ty_, SPANS[0]));
-
                                         let dest_place = Place {local: (temp_1).into(), projection: List::empty()};
 
-                                        // Call a function named do_nothing present in rapture::pointer
-                                        let inline_terminator = TerminatorKind::Call {
+                                        println!("########### operand_: {:?}", operand_);
+
+                                        // Create a block terminator that will execute the function call we want to inject
+                                        let intermediary_terminator = TerminatorKind::Call {
                                             func: operand_,
                                             args: vec![],
                                             destination: dest_place,
-                                            target: Some(inline_block),
+                                            target: Some(intermediary_block),
                                             unwind: UnwindAction::Continue,
                                             call_source: CallSource::Normal,
                                             fn_span: SPANS[0],
                                         };
 
+                                        // The current basic block's terminator is now replaced with the one we just created (which shifts the control flow to the intermediary block)
+                                        patch.patch_terminator(bb, intermediary_terminator);
+
+                                        //// DEBUG PRINTS
                                         // println!("ty_: {:?}", ty_);
-                                        println!("destination: {:?}", dest_place);
-                                        // println!("target: {:?}", Some(inline_block));
+                                        // println!("destination: {:?}", dest_place);
+                                        // println!("target: {:?}", Some(intermediary_block));
                                         // println!("unwind: {:?}", UnwindAction::Continue);
                                         // println!("call_source: {:?}", CallSource::Normal);
                                         // println!("fn_span: {:?}", SPANS[0]);
 
+                                        // This is a second block which injects another function call to a function (that prints something for us to verify our transformation)
+                                        let intermediary_block_2 = patch.new_block(BasicBlockData {
+                                            statements: vec![],
+                                            terminator: Some(data.terminator.as_ref().unwrap().clone()),
+                                            is_cleanup: false,
+                                        });
+
+                                        // Here we determine which function to target for the injection, using its crate number and definition index (which are statically fixed)
+                                        let crate_num_2 = CrateNum::new(0);
+                                        let def_index_2 = DefIndex::from_usize(7);
+                                        let _def_id_2 = DefId { krate: crate_num_2, index: def_index_2 };
+
+                                        // The function may have generic types as its parameters. These need to be statically mentioned if we are injecting a call to it
+                                        let _generic_args_2: &rustc_middle::ty::List<GenericArg<'_>> = List::empty();
+
+                                        // Creating the sugar of all the structures for the function type to be injected
+                                        let ty_2 = Ty::new(tcx, ty::FnDef(_def_id_2, _generic_args_2));
+                                        let const_2 = Const::Val(ConstValue::ZeroSized, ty_2);
+                                        let const_operand_2 = Box::new(ConstOperand { span: SPANS[0], user_ty: None, const_: const_2 });
+                                        let operand_2 = Operand::Constant(const_operand_2);
+                                        let dest_place_2 = Place {local: (temp_2).into(), projection: List::empty()};
                                         
+                                        println!("########### operand_: {:?}", operand_2);
 
-                                        // SECOND BLOCK!!
-                                        let inline_block_2 = patch.new_block(BasicBlockData {
-                                                    statements: vec![],
-                                                    terminator: Some(data.terminator.as_ref().unwrap().clone()),
-                                                    is_cleanup: false,
-                                                });
-
-                                        // println!("PtrToPtr: {:?}", operand);
-
-                                        let crate_num1 = CrateNum::new(0);
-                                        let def_index1 = DefIndex::from_usize(7);
-                                        let _def_id1 = DefId { krate: crate_num1, index: def_index1 };
-
-                                        let _generic_args1: &rustc_middle::ty::List<GenericArg<'_>> = List::empty();
-
-                                        // let tykind_ = ty::FnDef(_def_id, _generic_args);
-                                        let ty_1 = Ty::new(tcx, ty::FnDef(_def_id1, _generic_args1));
-
-                                        let const_1 = Const::Val(ConstValue::ZeroSized, ty_1);
-                                        
-                                        let const_operand1 = Box::new(ConstOperand { span: SPANS[0], user_ty: None, const_: const_1 });
-                                        let operand_1 = Operand::Constant(const_operand1);
-                                        println!("########### operand_: {:?}", operand_1);
-
-                                        // let local = body.local_decls.push(LocalDecl::new(ty_, SPANS[0]));
-
-                                        let dest_place1 = Place {local: (temp_2).into(), projection: List::empty()};
-
+                                        // This is how we create the arguments to be passed to the function that we are calling
                                         let operand_input = Operand::Copy(dest_place);
                                         let spanned_operand = Spanned { span: SPANS[0], node: operand_input };
 
-                                        // Call a function named just_print and pass the temp_1 as an argument
-                                        let inline_terminator1 = TerminatorKind::Call {
-                                            func: operand_1,
+                                        // Create a block terminator that will execute the function call we want to inject
+                                        let intermediary_terminator_2 = TerminatorKind::Call {
+                                            func: operand_2,
                                             args: vec![spanned_operand],
-                                            destination: dest_place1,
-                                            target: Some(inline_block_2),
+                                            destination: dest_place_2,
+                                            target: Some(intermediary_block_2),
                                             unwind: UnwindAction::Continue,
                                             call_source: CallSource::Normal,
                                             fn_span: SPANS[0],
                                         };
 
+                                        // The intermediary block is now made to point to the second intermediary block by virtue of its new terminator
+                                        patch.patch_terminator(intermediary_block, intermediary_terminator_2);
+
+                                        //// DEBUG PRINTS
                                         // println!("ty_: {:?}", ty_);
-                                        println!("destination: {:?}", dest_place1);
-                                        // println!("target: {:?}", Some(inline_block));
+                                        // println!("destination: {:?}", dest_place_2);
+                                        // println!("target: {:?}", Some(intermediary_block));
                                         // println!("unwind: {:?}", UnwindAction::Continue);
                                         // println!("call_source: {:?}", CallSource::Normal);
-                                        // println!("fn_span: {:?}", SPANS[0]);
-                                        patch.patch_terminator(bb, inline_terminator);
-                                        patch.patch_terminator(inline_block, inline_terminator1);
-
-                                        
+                                        // println!("fn_span: {:?}", SPANS[0]);                                       
                                     },
                                     _ => (),
                                 }
