@@ -1,4 +1,5 @@
 use crate::MirPass;
+use rustc_ast::Mutability;
 // use rustc_ast::InlineAsmOptions;
 // use rustc_ast::InlineAsmTemplatePiece;
 // use rustc_index::Idx;
@@ -13,12 +14,13 @@ use crate::Spanned;
 // use rustc_middle::mir::{dump_mir, PassWhere};
 use rustc_middle::mir::{
     /*traversal,*/ Body, LocalDecl, Local, InlineAsmOperand, /*LocalKind, Location,*/ BasicBlockData, Place, UnwindAction, CallSource, CastKind, Rvalue, 
-    Statement, StatementKind, TerminatorKind, Operand, Const, ConstValue, ConstOperand
+    Statement, StatementKind, TerminatorKind, Operand, Const, ConstValue, ConstOperand, BorrowKind, MutBorrowKind
 };
 // use crate::ty::ty_kind;
 use rustc_middle::ty::{self};
 use rustc_middle::ty::TyCtxt;
 use rustc_data_structures::fx::FxHashMap;
+// use crate::ty::BorrowKind;
 // use rustc_mir_dataflow::impls::MaybeLiveLocals;
 // use rustc_mir_dataflow::points::{/*save_as_intervals,*/ DenseLocationMap, PointIndex};
 // use rustc_mir_dataflow::Analysis;
@@ -290,11 +292,12 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
         let _temp_2 = body.local_decls.push(LocalDecl::new(return_type_2, SPANS[0]));
 
         // Obtaining the ADT type for MutDLTBoundedPointer
-        let def_id_adt = DefId { krate: CrateNum::new(20), index: DefIndex::from_usize(84) };
+        let def_id_adt = DefId { krate: CrateNum::new(20), index: DefIndex::from_usize(83) };
         let adt_type = tcx.adt_def(def_id_adt);
 
         // Creating temporaries for each of the roots that we have found. These temporaries will be of type MutDLTBoundedPointer
         let mut root_temps: FxHashMap<Local, Local> = FxHashMap::default();
+        let mut root_refs: FxHashMap<Local, Local> = FxHashMap::default();
         let mut root_generics: FxHashMap<Local, GenericArg<'_>> = FxHashMap::default();
         for root in alloc_roots.iter() {
             // We make a generic arg corresponding to the type of the root
@@ -307,6 +310,15 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
             root_temps.insert(*root, temp);
         }
 
+        // Creating reference type temporaries for each root
+        for root in alloc_roots.iter() {
+            let root_ty = body.local_decls[*root].ty;
+            let region = tcx.lifetimes.re_erased;
+            let ref_ty = Ty::new(tcx, ty::Ref(region, root_ty, Mutability::Mut));
+            let reftemp = body.local_decls.push(LocalDecl::new(ref_ty, SPANS[0]));
+            root_refs.insert(*root, reftemp);
+        }
+
         // Create a set of locals that hold the Local for each root allocation from alloc_roots
         let _root_allocations: FxHashMap<Local, Local> = alloc_roots.iter().map(|x| (*x, *x)).collect();
 
@@ -317,21 +329,42 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                     Statement {kind: StatementKind::Assign(box (lhs, _rhs)), .. } => {
                         match lhs {
                             Place { local, .. } => {
-                                // Check if the local is in the root_allocations set
+                            // Check if the local is in the root_allocations set
                                 if alloc_roots.contains(local) {
                                     // Make the RaptureCell function call for generating the capability
                                     // Store the capability into the local temporary that we have created for this root
                                     // Store a mapping of this allocation and its capability (or its address) 
                                     println!("local: {:?}", local);
 
+                                    // Print all details of the statement at i+1
+                                    match &data.statements[i+1].kind {
+                                        StatementKind::Assign(box (lhs1, rhs1)) => {
+                                            println!("stmt lhs: {:?}", lhs1);
+                                            match rhs1 {
+                                                Rvalue::Ref(region, borrowkind, place) => {
+                                                    println!("rhs: Ref: {:?}, {:?}, {:?}", region, borrowkind, place);
+                                                },
+                                                _ => (),
+                                            }
+                                        },
+                                        _ => (),
+                                    }
+
+                                    let new_stmt = Statement {
+                                        source_info: stmt.source_info,
+                                        kind: StatementKind::Assign(Box::new((root_refs[local].into(), Rvalue::Ref(tcx.lifetimes.re_erased, BorrowKind::Mut { kind: MutBorrowKind::Default }, Place { local: *local, projection: List::empty() })))),
+                                    };
+
                                     // Shift all the statements beyond our target statement to a new vector and clear them from the original block
                                     let mut new_stmts = vec![];
                                     for (j, stmt) in data.statements.iter_mut().enumerate() {
-                                        if j > i {
+                                        if j > i { //TODO: REMEMBER TO REVERT THIS TO j > i !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
                                             new_stmts.push(stmt.clone());
                                             stmt.make_nop();
                                         }
                                     }
+
+                                    data.statements.push(new_stmt);
 
                                     // Create an intermediary block that will be inserted between the current block and the next block
                                     let intermediary_block;
@@ -356,7 +389,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
 
                                     // Here we determine which function to target for the injection, using its crate number and definition index (which are statically fixed)
                                     let crate_num = CrateNum::new(20);
-                                    let def_index = DefIndex::from_usize(101);
+                                    let def_index = DefIndex::from_usize(98);
                                     let _def_id = DefId { krate: crate_num, index: def_index };
 
                                     // The function may have generic types as its parameters. These need to be statically mentioned if we are injecting a call to it
@@ -371,7 +404,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                     let dest_place = Place {local: (root_temps[&local]).into(), projection: List::empty()};
 
                                     // This is how we create the arguments to be passed to the function that we are calling
-                                    let operand_input = Operand::Copy((*local).into());
+                                    let operand_input = Operand::Copy(Place {local: (root_refs[local]).into(), projection: List::empty()});
                                     let spanned_operand = Spanned { span: SPANS[0], node: operand_input };
 
                                     println!("########### operand_: {:?}", operand_);
@@ -413,7 +446,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
 
                                 // Here we determine which function to target for the injection, using its crate number and definition index (which are statically fixed)
                                 let crate_num = CrateNum::new(20);
-                                let def_index = DefIndex::from_usize(101);
+                                let def_index = DefIndex::from_usize(98);
                                 let _def_id = DefId { krate: crate_num, index: def_index };
 
                                 // The function may have generic types as its parameters. These need to be statically mentioned if we are injecting a call to it
@@ -425,7 +458,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                 let const_ = Const::Val(ConstValue::ZeroSized, ty_);
                                 let const_operand = Box::new(ConstOperand { span: SPANS[0], user_ty: None, const_: const_ });
                                 let operand_ = Operand::Constant(const_operand);
-                                let dest_place = Place {local: (root_temps[&destination.local]).into(), projection: List::empty()};
+                                let dest_place = Place {local: (1 as usize).into(), projection: List::empty()};
 
                                 // This is how we create the arguments to be passed to the function that we are calling
                                 let operand_input = Operand::Copy((destination.local).into());
@@ -481,14 +514,44 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
 
 
         // There will be a third loop for executing the drops for all the capabilities (identical to what we originally intended to do in elaborate_drops)
-        for (_bb, data) in body.basic_blocks_mut().iter_enumerated_mut() {
+        for (bb, data) in body.basic_blocks_mut().iter_enumerated_mut() {
             match &data.terminator {
                 Some(x) => {
                     match &x.kind {
-                        TerminatorKind::Drop { place, .. } => {
+                        TerminatorKind::Drop { place, target, unwind, replace } => {
                             // Retrieve the associated capability using the two hash maps
                             // Inject inline asm to execute the drop on that capability
-                            _ = place;
+                            if alloc_roots.contains(&(place.local)) {
+                                // Create a block terminator that will execute the function call we want to inject
+                                let drop_terminator = TerminatorKind::Drop {
+                                    place: place.clone(),
+                                    target: target.clone(),
+                                    unwind: unwind.clone(),
+                                    replace: replace.clone(),
+                                };
+
+                                // Shift all the statements beyond our target statement to a new vector and clear them from the original block
+                                let new_stmts = vec![];
+
+                                // Create an intermediary block that will be inserted between the current block and the next block
+                                let drop_block = patch.new_block(BasicBlockData {
+                                    statements: new_stmts,
+                                    terminator: Some(data.terminator.as_ref().unwrap().clone()),
+                                    is_cleanup: data.is_cleanup.clone(),
+                                });
+
+                                patch.patch_terminator(drop_block, drop_terminator);
+
+                                let new_terminator = TerminatorKind::Drop {
+                                    place: Place { local: (root_temps[&place.local]).into(), projection: List::empty() },
+                                    target: drop_block,
+                                    unwind: unwind.clone(),
+                                    replace: replace.clone(),
+                                };
+
+                                // The current basic block's terminator is now replaced with the one we just created (which shifts the control flow to the intermediary block)
+                                patch.patch_terminator(bb, new_terminator);
+                            }
                         },
                         _ => (),
                     }
