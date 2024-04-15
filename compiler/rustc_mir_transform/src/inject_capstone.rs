@@ -440,37 +440,38 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                     };
 
                                     // Insert a new function call to std::mem::size_of for the root type
-                                    let size_of_block = patch.new_block(BasicBlockData {
+                                    let size_calc_block = patch.new_block(BasicBlockData {
                                         statements: new_stmts,
                                         terminator: Some(data.terminator.as_ref().unwrap().clone()),
                                         is_cleanup: false,
                                     });
 
                                     // Here we determine which function to target for the injection, using its crate number and definition index (which are statically fixed)
-                                    let size_of_crate_num = CrateNum::new(2);
-                                    let size_of_def_index = DefIndex::from_usize(1726);
-                                    let size_of_def_id = DefId { krate: size_of_crate_num, index: size_of_def_index };
-                                    if !tcx.def_path_str(size_of_def_id).contains("mem::size_of") {
-                                        println!("%$%$%$%$% Corrupted std::mem::size_of definition");
+                                    let size_calc_crate_num = CrateNum::new(2);
+                                    let size_calc_def_index = DefIndex::from_usize(1726);
+                                    let size_calc_def_id = DefId { krate: size_calc_crate_num, index: size_calc_def_index };
+                                    let size_calc_name = tcx.def_path_str(size_calc_def_id);
+                                    if !name.contains("mem::size_of") {
+                                        println!("%$%$%$%$% Corrupted std::mem::size_of definition: {}", size_calc_name);
                                     }
 
                                     let ty_bool = ty::Const::from_bool(tcx, true);
                                     let g_bool = GenericArg::from(ty_bool);
 
-                                    let size_of_generic_args = tcx.mk_args(&[g_root, g_bool]);
+                                    let size_calc_generic_args = tcx.mk_args(&[g_root, g_bool]);
 
-                                    let size_of_ty_ = Ty::new(tcx, ty::FnDef(size_of_def_id, size_of_generic_args));
-                                    let size_of_const_ = Const::Val(ConstValue::ZeroSized, size_of_ty_);
-                                    let size_of_const_operand = Box::new(ConstOperand { span: SPANS[0], user_ty: None, const_: size_of_const_ });
-                                    let size_of_operand_ = Operand::Constant(size_of_const_operand);
+                                    let size_calc_ty_ = Ty::new(tcx, ty::FnDef(size_calc_def_id, size_calc_generic_args));
+                                    let size_calc_const_ = Const::Val(ConstValue::ZeroSized, size_calc_ty_);
+                                    let size_calc_const_operand = Box::new(ConstOperand { span: SPANS[0], user_ty: None, const_: size_calc_const_ });
+                                    let size_calc_operand_ = Operand::Constant(size_calc_const_operand);
 
-                                    let size_of_dest_place = Place {local: (root_sizes[local]).into(), projection: List::empty()};
+                                    let size_calc_dest_place = Place {local: (root_sizes[local]).into(), projection: List::empty()};
 
-                                    let size_of_terminator = TerminatorKind::Call {
-                                        func: size_of_operand_,
+                                    let size_calc_terminator = TerminatorKind::Call {
+                                        func: size_calc_operand_,
                                         args: vec![],
-                                        destination: size_of_dest_place,
-                                        target: Some(size_of_block),
+                                        destination: size_calc_dest_place,
+                                        target: Some(size_calc_block),
                                         unwind: UnwindAction::Continue,
                                         call_source: CallSource::Normal,
                                         fn_span: SPANS[0],
@@ -478,7 +479,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
 
                                     // The current basic block's terminator is now replaced with the one we just created (which shifts the control flow to the intermediary block)
                                     patch.patch_terminator(bb, intermediary_terminator);
-                                    patch.patch_terminator(intermediary_block, size_of_terminator);
+                                    patch.patch_terminator(intermediary_block, size_calc_terminator);
                                 }
                                 // match &body.local_decls[local].ty.kind {
                                 //     ty::Ref(_, ty, _) => {
@@ -503,6 +504,12 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                 let crate_num = CrateNum::new(20);
                                 let def_index = DefIndex::from_usize(98);
                                 let _def_id = DefId { krate: crate_num, index: def_index };
+
+                                // We check the name of this function and see if it matches with "from_box"
+                                let name = tcx.def_path_str(_def_id);
+                                if name != "MutDLTBoundedPointer::<T>::from_ref" {
+                                    println!("%$%$%$%$% Corrupted RaptureCell definition: {}", name);
+                                }
 
                                 // The function may have generic types as its parameters. These need to be statically mentioned if we are injecting a call to it
                                 let g = root_generics[&destination.local];
