@@ -67,7 +67,6 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                     Statement { kind: StatementKind::Assign(box (lhs, rhs)), .. } => {
                         match rhs {
                             // Match the rvalue on the RHS based on what we want
-                            // To be written (Fangqi is working on this)
                             // Once found, run backprop to locate the root of those assigned values (lhs)
                             // Add that assigned value and the root to the RootAllocations struct
                             Rvalue::Cast(cast_type, operand, ty) => {
@@ -326,7 +325,15 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
         // Create a set of locals that hold the Local for each root allocation from alloc_roots
         let _root_allocations: FxHashMap<Local, Local> = alloc_roots.iter().map(|x| (*x, *x)).collect();
 
-        // Second, downward, loop to find the first uses of those pointers as well as track their borrows
+        // Create temporaries that will hold the size of the root type
+        let mut root_sizes: FxHashMap<Local, Local> = FxHashMap::default();
+        for root in alloc_roots.iter() {
+            let size_ty = Ty::new(tcx, ty::Uint(ty::UintTy::Usize));
+            let size_temp = body.local_decls.push(LocalDecl::new(size_ty, SPANS[0]));
+            root_sizes.insert(*root, size_temp);
+        }
+
+        // Second, downward, loop to find the first uses of those pointers as well as track their borrows and later uses such as dereferences
         for (bb, data) in body.basic_blocks_mut().iter_enumerated_mut() {
             for (i, stmt) in data.statements.clone().iter().enumerate().rev() {
                 match stmt {
@@ -362,7 +369,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                     // Shift all the statements beyond our target statement to a new vector and clear them from the original block
                                     let mut new_stmts = vec![];
                                     for (j, stmt) in data.statements.iter_mut().enumerate() {
-                                        if j > i { //TODO: REMEMBER TO REVERT THIS TO j > i !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+                                        if j > i { 
                                             new_stmts.push(stmt.clone());
                                             stmt.make_nop();
                                         }
@@ -377,14 +384,14 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                     match &data.terminator {
                                         Some(_x) => {
                                             intermediary_block = patch.new_block(BasicBlockData {
-                                                statements: new_stmts,
+                                                statements: vec![],
                                                 terminator: Some(data.terminator.as_ref().unwrap().clone()),
                                                 is_cleanup: false,
                                             });
                                         },
                                         _ => {
                                             intermediary_block = patch.new_block(BasicBlockData {
-                                                statements: new_stmts,
+                                                statements: vec![],
                                                 terminator: None,
                                                 is_cleanup: false,
                                             });
@@ -403,8 +410,8 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                     }
 
                                     // The function may have generic types as its parameters. These need to be statically mentioned if we are injecting a call to it
-                                    let g = root_generics[&local];
-                                    let generic_args: &rustc_middle::ty::List<GenericArg<'_>> = tcx.mk_args(&[g]); 
+                                    let g_root = root_generics[&local];
+                                    let generic_args: &rustc_middle::ty::List<GenericArg<'_>> = tcx.mk_args(&[g_root]); 
 
                                     // Creating the sugar of all the structures for the function type to be injected
                                     let ty_ = Ty::new(tcx, ty::FnDef(_def_id, generic_args));
@@ -432,8 +439,46 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                         fn_span: SPANS[0],
                                     };
 
+                                    // Insert a new function call to std::mem::size_of for the root type
+                                    let size_of_block = patch.new_block(BasicBlockData {
+                                        statements: new_stmts,
+                                        terminator: Some(data.terminator.as_ref().unwrap().clone()),
+                                        is_cleanup: false,
+                                    });
+
+                                    // Here we determine which function to target for the injection, using its crate number and definition index (which are statically fixed)
+                                    let size_of_crate_num = CrateNum::new(2);
+                                    let size_of_def_index = DefIndex::from_usize(1726);
+                                    let size_of_def_id = DefId { krate: size_of_crate_num, index: size_of_def_index };
+                                    if !tcx.def_path_str(size_of_def_id).contains("mem::size_of") {
+                                        println!("%$%$%$%$% Corrupted std::mem::size_of definition");
+                                    }
+
+                                    let ty_bool = ty::Const::from_bool(tcx, true);
+                                    let g_bool = GenericArg::from(ty_bool);
+
+                                    let size_of_generic_args = tcx.mk_args(&[g_root, g_bool]);
+
+                                    let size_of_ty_ = Ty::new(tcx, ty::FnDef(size_of_def_id, size_of_generic_args));
+                                    let size_of_const_ = Const::Val(ConstValue::ZeroSized, size_of_ty_);
+                                    let size_of_const_operand = Box::new(ConstOperand { span: SPANS[0], user_ty: None, const_: size_of_const_ });
+                                    let size_of_operand_ = Operand::Constant(size_of_const_operand);
+
+                                    let size_of_dest_place = Place {local: (root_sizes[local]).into(), projection: List::empty()};
+
+                                    let size_of_terminator = TerminatorKind::Call {
+                                        func: size_of_operand_,
+                                        args: vec![],
+                                        destination: size_of_dest_place,
+                                        target: Some(size_of_block),
+                                        unwind: UnwindAction::Continue,
+                                        call_source: CallSource::Normal,
+                                        fn_span: SPANS[0],
+                                    };
+
                                     // The current basic block's terminator is now replaced with the one we just created (which shifts the control flow to the intermediary block)
                                     patch.patch_terminator(bb, intermediary_terminator);
+                                    patch.patch_terminator(intermediary_block, size_of_terminator);
                                 }
                                 // match &body.local_decls[local].ty.kind {
                                 //     ty::Ref(_, ty, _) => {
