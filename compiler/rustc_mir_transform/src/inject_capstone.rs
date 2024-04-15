@@ -293,6 +293,10 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
 
         // Obtaining the ADT type for MutDLTBoundedPointer
         let def_id_adt = DefId { krate: CrateNum::new(20), index: DefIndex::from_usize(83) };
+        let name = tcx.def_path_str(def_id_adt);
+        if name != "MutDLTBoundedPointer" {
+            println!("%$%$%$%$% Corrupted RaptureCell definition: {}", name);
+        }
         let adt_type = tcx.adt_def(def_id_adt);
 
         // Creating temporaries for each of the roots that we have found. These temporaries will be of type MutDLTBoundedPointer
@@ -391,6 +395,12 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                     let crate_num = CrateNum::new(20);
                                     let def_index = DefIndex::from_usize(98);
                                     let _def_id = DefId { krate: crate_num, index: def_index };
+                                    
+                                    // We check the name of this function and see if it matches with "from_box"
+                                    let name = tcx.def_path_str(_def_id);
+                                    if name != "MutDLTBoundedPointer::<T>::from_ref" {
+                                        println!("%$%$%$%$% Corrupted RaptureCell definition: {}", name);
+                                    }
 
                                     // The function may have generic types as its parameters. These need to be statically mentioned if we are injecting a call to it
                                     let g = root_generics[&local];
