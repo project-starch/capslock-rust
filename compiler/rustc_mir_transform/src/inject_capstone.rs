@@ -16,9 +16,9 @@ use rustc_middle::mir::{
     /*traversal,*/ Body, LocalDecl, Local, InlineAsmOperand, /*LocalKind, Location,*/ BasicBlockData, Place, UnwindAction, CallSource, CastKind, Rvalue, 
     Statement, StatementKind, TerminatorKind, Operand, Const, ConstValue, ConstOperand, BorrowKind, MutBorrowKind
 };
+use rustc_middle::mir::interpret::Scalar;
 // use crate::ty::ty_kind;
-use rustc_middle::ty::{self};
-use rustc_middle::ty::TyCtxt;
+use rustc_middle::ty::{self, TyCtxt, ScalarInt};
 use rustc_data_structures::fx::FxHashMap;
 // use crate::ty::BorrowKind;
 // use rustc_mir_dataflow::impls::MaybeLiveLocals;
@@ -289,10 +289,18 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
         let _temp_1 = body.local_decls.push(LocalDecl::new(return_type_1, SPANS[0]));
         let return_type_2 = Ty::new(tcx, ty::Bool);
         let _temp_2 = body.local_decls.push(LocalDecl::new(return_type_2, SPANS[0]));
+        let _empty_tuple = Ty::new(tcx, ty::Tuple(List::empty()));
+        let _empty_tuple_temp = body.local_decls.push(LocalDecl::new(_empty_tuple, SPANS[0]));
 
         // Obtaining the ADT type for MutDLTBoundedPointer
-        let def_id_adt = DefId { krate: CrateNum::new(20), index: DefIndex::from_usize(83) };
-        let name = tcx.def_path_str(def_id_adt);
+        let mut def_id_int = 0;
+        let mut def_id_adt = DefId { krate: CrateNum::new(20), index: DefIndex::from_usize(def_id_int) };
+        let mut name = tcx.def_path_str(def_id_adt);
+        while name != "MutDLTBoundedPointer" {
+            def_id_int += 1;
+            def_id_adt = DefId { krate: CrateNum::new(20), index: DefIndex::from_usize(def_id_int) };
+            name = tcx.def_path_str(def_id_adt);
+        }
         if name != "MutDLTBoundedPointer" {
             println!("%$%$%$%$% Corrupted RaptureCell definition: {}", name);
         }
@@ -300,8 +308,11 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
 
         // Creating temporaries for each of the roots that we have found. These temporaries will be of type MutDLTBoundedPointer
         let mut root_temps: FxHashMap<Local, Local> = FxHashMap::default();
+
         let mut root_refs: FxHashMap<Local, Local> = FxHashMap::default();
         let mut root_generics: FxHashMap<Local, GenericArg<'_>> = FxHashMap::default();
+        let mut dlt_generics: FxHashMap<Local, GenericArg<'_>> = FxHashMap::default();
+
         for root in alloc_roots.iter() {
             // We make a generic arg corresponding to the type of the root
             let root_ty = body.local_decls[*root].ty;
@@ -311,6 +322,8 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
             let root_adt_type = Ty::new(tcx, ty::Adt(adt_type, generic_args));
             let temp = body.local_decls.push(LocalDecl::new(root_adt_type, SPANS[0]));
             root_temps.insert(*root, temp);
+            let dlt_generic = GenericArg::from(root_adt_type);
+            dlt_generics.insert(*root, dlt_generic);
         }
 
         // Creating reference type temporaries for each root
@@ -333,11 +346,20 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
             root_sizes.insert(*root, size_temp);
         }
 
+        let mut root_temp_refs: FxHashMap<Local, Local> = FxHashMap::default();
+        for root in alloc_roots.iter() {
+            let root_ty = body.local_decls[root_temps[root]].ty;
+            let region = tcx.lifetimes.re_erased;
+            let ref_ty = Ty::new(tcx, ty::Ref(region, root_ty, Mutability::Mut));
+            let reftemp = body.local_decls.push(LocalDecl::new(ref_ty, SPANS[0]));
+            root_temp_refs.insert(*root, reftemp);
+        }
+
         // Second, downward, loop to find the first uses of those pointers as well as track their borrows and later uses such as dereferences
         for (bb, data) in body.basic_blocks_mut().iter_enumerated_mut() {
             for (i, stmt) in data.statements.clone().iter().enumerate().rev() {
                 match stmt {
-                    Statement {kind: StatementKind::Assign(box (lhs, _rhs)), .. } => {
+                    Statement {kind: StatementKind::Assign(box (lhs, rhs)), .. } => {
                         match lhs {
                             Place { local, .. } => {
                             // Check if the local is in the root_allocations set
@@ -400,11 +422,16 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
 
                                     // Here we determine which function to target for the injection, using its crate number and definition index (which are statically fixed)
                                     let crate_num = CrateNum::new(20);
-                                    let def_index = DefIndex::from_usize(98);
-                                    let _def_id = DefId { krate: crate_num, index: def_index };
+                                    let def_index = DefIndex::from_usize(0);
+                                    let mut _def_id = DefId { krate: crate_num, index: def_index };
+                                    let mut _def_id_int = 0;
+                                    let mut name = tcx.def_path_str(_def_id);
                                     
-                                    // We check the name of this function and see if it matches with "from_box"
-                                    let name = tcx.def_path_str(_def_id);
+                                    while name != "MutDLTBoundedPointer::<T>::from_ref" {
+                                        _def_id_int += 1;
+                                        _def_id = DefId { krate: CrateNum::new(20), index: DefIndex::from_usize(_def_id_int) };
+                                        name = tcx.def_path_str(_def_id);
+                                    }
                                     if name != "MutDLTBoundedPointer::<T>::from_ref" {
                                         println!("%$%$%$%$% Corrupted RaptureCell definition: {}", name);
                                     }
@@ -423,10 +450,6 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                     // This is how we create the arguments to be passed to the function that we are calling
                                     let operand_input = Operand::Copy(Place {local: (root_refs[local]).into(), projection: List::empty()});
                                     let spanned_operand = Spanned { span: SPANS[0], node: operand_input };
-
-                                    println!("########### operand_: {:?}", operand_);
-                                    println!("########### dest_place: {:?}", dest_place);
-                                    println!("########### spanned_operand: {:?}", spanned_operand);
 
                                     // Create a block terminator that will execute the function call we want to inject
                                     let intermediary_terminator = TerminatorKind::Call {
@@ -451,7 +474,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                     let size_calc_def_index = DefIndex::from_usize(1726);
                                     let size_calc_def_id = DefId { krate: size_calc_crate_num, index: size_calc_def_index };
                                     let size_calc_name = tcx.def_path_str(size_calc_def_id);
-                                    if !name.contains("mem::size_of") {
+                                    if !size_calc_name.contains("mem::size_of") {
                                         println!("%$%$%$%$% Corrupted std::mem::size_of definition: {}", size_calc_name);
                                     }
 
@@ -489,6 +512,120 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                 // }
                             }
                         }
+
+                        match rhs {
+                            Rvalue::Use(operand) => {
+                                match operand {
+                                    Operand::Copy(place) => {
+                                        if alloc_roots.contains(&place.local) {
+                                            println!("Use Operand on Copy: {:?}", place)
+                                        }
+                                    },
+                                    Operand::Move(place) => {
+                                        if alloc_roots.contains(&place.local) {
+                                            println!("Use Operand on Move: {:?}", place)
+                                        }
+                                    },
+                                    Operand::Constant(boxed_constant) => {
+                                        // Check if the value of the boxed constant is scalar 69, which is our marker (this is voodoo magic for now and must be formalised later)
+                                        let constant = boxed_constant.const_;
+                                        match constant {
+                                            Const::Val(val, _ty) => {
+                                                match val {
+                                                    ConstValue::Scalar(scalar) => {
+                                                        match scalar {
+                                                            Scalar::Int(int) => {
+                                                                match int.try_to_u32() {
+                                                                    Ok(x) => {
+                                                                        if x == 69 {
+                                                                            println!("# Marker found!");
+
+                                                                            let local: Local = (1 as usize).into(); // hard coding the first root for now
+
+                                                                            let new_stmt = Statement {
+                                                                                source_info: stmt.source_info,
+                                                                                kind: StatementKind::Assign(Box::new((root_temp_refs[&local].into(), Rvalue::Ref(tcx.lifetimes.re_erased, BorrowKind::Mut { kind: MutBorrowKind::Default }, Place { local: root_temps[&local], projection: List::empty() })))),
+                                                                            };
+
+                                                                            data.statements.push(new_stmt);
+
+                                                                            let deref_block = patch.new_block(BasicBlockData {
+                                                                                statements: vec![],
+                                                                                terminator: Some(data.terminator.as_ref().unwrap().clone()),
+                                                                                is_cleanup: false,
+                                                                            });
+
+                                                                            let crate_index = CrateNum::new(20);
+                                                                            let def_index = DefIndex::from_usize(0);
+                                                                            let mut _def_id_int = 0;
+                                                                            let mut _def_id = DefId { krate: crate_index, index: def_index };
+                                                                            let mut name = tcx.def_path_str(_def_id);
+
+                                                                            while name != "index_mut_bound" {
+                                                                                _def_id_int += 1;
+                                                                                _def_id = DefId { krate: CrateNum::new(20), index: DefIndex::from_usize(_def_id_int) };
+                                                                                name = tcx.def_path_str(_def_id);
+                                                                            }
+
+                                                                            if tcx.def_path_str(_def_id) != "index_mut_bound" {
+                                                                                println!("%$%$%$%$% Corrupted index_mut_bound definition index: {}", tcx.def_path_str(_def_id));
+                                                                            }
+
+                                                                            // The function may have generic types as its parameters. These need to be statically mentioned if we are injecting a call to it
+                                                                            let generic_args: &rustc_middle::ty::List<GenericArg<'_>> = tcx.mk_args(&[dlt_generics[&local], root_generics[&local]]); 
+                                                                            println!("!! generic_args: {:?}", generic_args);
+
+                                                                            // Creating the sugar of all the structures for the function type to be injected
+                                                                            let ty_ = Ty::new(tcx, ty::FnDef(_def_id, generic_args));
+                                                                            let const_ = Const::Val(ConstValue::ZeroSized, ty_);
+                                                                            let const_operand = Box::new(ConstOperand { span: SPANS[0], user_ty: None, const_: const_ });
+                                                                            let operand_ = Operand::Constant(const_operand);
+                                                                            let dest_place = Place {local: (_empty_tuple_temp).into(), projection: List::empty()};
+
+                                                                            // There will be three inputs to index_mut_bound: the pointer (root: MutDLTBoundedPointer), the offset (0 in this case), and the size of the root type (calculated earlier)
+                                                                            // let operand_input1 = Operand::Copy(Place {local: (root_temps[&local]).into(), projection: List::empty()});
+                                                                            let operand_input1 = Operand::Move(Place {local: (root_temp_refs[&local]).into(), projection: List::empty()});
+                                                                            let spanned_operand1 = Spanned { span: SPANS[0], node: operand_input1 };
+
+                                                                            let operand_input2 = Operand::Constant(Box::new(ConstOperand { span: SPANS[0], user_ty: None, const_: Const::from_scalar(tcx, Scalar::Int(ScalarInt::from(0 as u64)), Ty::new(tcx, ty::Uint(ty::UintTy::Usize))) }));
+                                                                            let spanned_operand2 = Spanned { span: SPANS[0], node: operand_input2 };
+
+                                                                            let operand_input3 = Operand::Move(Place {local: (root_sizes[&local]).into(), projection: List::empty()});
+                                                                            let spanned_operand3 = Spanned { span: SPANS[0], node: operand_input3 };
+
+                                                                            println!("t########### operand_: {:?}", operand_);
+                                                                            println!("t########### dest_place: {:?}", dest_place);
+
+                                                                            // Create a block terminator that will execute the function call we want to inject
+                                                                            let deref_terminator = TerminatorKind::Call {
+                                                                                func: operand_,
+                                                                                args: vec![spanned_operand1, spanned_operand2, spanned_operand3],
+                                                                                destination: dest_place,
+                                                                                target: Some(deref_block),
+                                                                                unwind: UnwindAction::Continue,
+                                                                                call_source: CallSource::Normal,
+                                                                                fn_span: SPANS[0],
+                                                                            };
+
+                                                                            patch.patch_terminator(bb, deref_terminator);
+                                                                        }
+                                                                    },
+                                                                    _ => (),
+                                                                }
+                                                            },
+                                                            _ => (),
+                                                        }
+                                                    },
+                                                    _ => (),
+                                                }
+                                            },
+                                            _ => (),
+                                        }
+                                    },
+                                }
+                            }
+                            _ => (),
+                        }
                     },
                     _ => (),
                 }
@@ -501,9 +638,17 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                 println!("local: {:?}", destination.local);
 
                                 // Here we determine which function to target for the injection, using its crate number and definition index (which are statically fixed)
-                                let crate_num = CrateNum::new(20);
+                                let crate_index = CrateNum::new(20);
                                 let def_index = DefIndex::from_usize(98);
-                                let _def_id = DefId { krate: crate_num, index: def_index };
+                                let mut _def_id_int = 0;
+                                let mut _def_id = DefId { krate: crate_index, index: def_index };
+                                let mut name = tcx.def_path_str(_def_id);
+
+                                while name != "from_ref" {
+                                    _def_id_int += 1;
+                                    _def_id = DefId { krate: CrateNum::new(20), index: DefIndex::from_usize(_def_id_int) };
+                                    name = tcx.def_path_str(_def_id);
+                                }
 
                                 // We check the name of this function and see if it matches with "from_box"
                                 let name = tcx.def_path_str(_def_id);
@@ -773,9 +918,19 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                             println!("func: {:?}", func);
                             match func {
                                 Operand::Constant(c) => {
+                                    println!("constoperand.user_ty: {:?}", c.user_ty);
                                     match c.const_ {
                                         Const::Val(_constval, ty) => {
+                                            println!("const_.val: {:?}", _constval);
                                             println!("const_.ty: {:?}", ty);
+
+                                            match ty.kind() {
+                                                ty::FnDef(_def_id, generic_args) => {
+                                                    println!("def_id: {:?}", _def_id);
+                                                    println!("generic_args: {:?}", generic_args);
+                                                },
+                                                _ => (),
+                                            }
                                         },
                                         _ => (),
                                     }
