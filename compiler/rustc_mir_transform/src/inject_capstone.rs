@@ -271,6 +271,7 @@ fn call_index_mut_bound<'tcx> (
 
 impl<'tcx> MirPass<'tcx> for InjectCapstone {
     fn run_pass(&self, tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
+        println!("run pass start");
         let mut patch = MirPatch::new(body);
 
         let mut rapture_crate_number: u32 = 0;
@@ -568,7 +569,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
             local_sizes.insert(*root, size_temp);
         }
         for local in tracked_locals.iter() {
-            if !alloc_roots.contains(local) {
+            if !local_sizes.contains_key(local) {
                 let size_ty = Ty::new(tcx, ty::Uint(ty::UintTy::Usize));
                 size_temp = body.local_decls.push(LocalDecl::new(size_ty, SPANS[0]));
                 local_sizes.insert(*local, size_temp);
@@ -671,6 +672,11 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                 let g_bool = GenericArg::from(ty_bool);
                                 let generics_list_for_size = [g_root, g_bool];
 
+                                if !local_sizes.contains_key(&local) {
+                                    new_temps_counter += 1;
+                                    local_sizes.insert(local, (usize::from(size_temp) + new_temps_counter).into());
+                                }
+        
                                 let size_calc_terminator = call_size_of(tcx, local, local_sizes.clone(), &generics_list_for_size, size_calc_block);
 
                                 println!("Patching prevbb inside LHS");
@@ -740,7 +746,12 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                                 let ty_bool = ty::Const::from_bool(tcx, true);
                                                 let g_bool = GenericArg::from(ty_bool);
                                                 let generics_list_for_size = [g_root, g_bool];
-                
+
+                                                if !local_sizes.contains_key(&local) {
+                                                    new_temps_counter += 1;
+                                                    local_sizes.insert(local, (usize::from(size_temp) + new_temps_counter).into());
+                                                }
+        
                                                 let size_calc_terminator = call_size_of(tcx, local, local_sizes.clone(), &generics_list_for_size, size_calc_block);
                 
                                                 println!("Patching prevbb inside LHS");
@@ -812,7 +823,12 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                                     let ty_bool = ty::Const::from_bool(tcx, true);
                                                     let g_bool = GenericArg::from(ty_bool);
                                                     let generics_list_for_size = [g_root, g_bool];
-                    
+
+                                                    if !local_sizes.contains_key(&local) {
+                                                        new_temps_counter += 1;
+                                                        local_sizes.insert(local, (usize::from(size_temp) + new_temps_counter).into());
+                                                    }
+        
                                                     let size_calc_terminator = call_size_of(tcx, local, local_sizes.clone(), &generics_list_for_size, size_calc_block);
                     
                                                     println!("Patching prevbb inside LHS");
@@ -885,7 +901,12 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                                 let ty_bool = ty::Const::from_bool(tcx, true);
                                                 let g_bool = GenericArg::from(ty_bool);
                                                 let generics_list_for_size = [g_root, g_bool];
-                
+
+                                                if !local_sizes.contains_key(&local) {
+                                                    new_temps_counter += 1;
+                                                    local_sizes.insert(local, (usize::from(size_temp) + new_temps_counter).into());
+                                                }
+        
                                                 let size_calc_terminator = call_size_of(tcx, local, local_sizes.clone(), &generics_list_for_size, size_calc_block);
                 
                                                 println!("Patching prevbb inside LHS");
@@ -954,7 +975,12 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                                 let ty_bool = ty::Const::from_bool(tcx, true);
                                                 let g_bool = GenericArg::from(ty_bool);
                                                 let generics_list_for_size = [g_root, g_bool];
-                
+
+                                                if !local_sizes.contains_key(&local) {
+                                                    new_temps_counter += 1;
+                                                    local_sizes.insert(local, (usize::from(size_temp) + new_temps_counter).into());
+                                                }
+        
                                                 let size_calc_terminator = call_size_of(tcx, local, local_sizes.clone(), &generics_list_for_size, size_calc_block);
                 
                                                 println!("Patching prevbb inside LHS");
@@ -1025,8 +1051,10 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                         let g_bool = GenericArg::from(ty_bool);
                                         let generics_list_for_size = [g_root, g_bool];
 
-                                        new_temps_counter += 1;
-                                        local_sizes.insert(local, (usize::from(size_temp) + new_temps_counter).into());
+                                        if !local_sizes.contains_key(&local) {
+                                            new_temps_counter += 1;
+                                            local_sizes.insert(local, (usize::from(size_temp) + new_temps_counter).into());
+                                        }
         
                                         let size_calc_terminator = call_size_of(tcx, local, local_sizes.clone(), &generics_list_for_size, size_calc_block);
         
@@ -1095,7 +1123,12 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                                 let ty_bool = ty::Const::from_bool(tcx, true);
                                                 let g_bool = GenericArg::from(ty_bool);
                                                 let generics_list_for_size = [g_root, g_bool];
-                
+
+                                                if !local_sizes.contains_key(&local) {
+                                                    new_temps_counter += 1;
+                                                    local_sizes.insert(local, (usize::from(size_temp) + new_temps_counter).into());
+                                                }
+        
                                                 let size_calc_terminator = call_size_of(tcx, local, local_sizes.clone(), &generics_list_for_size, size_calc_block);
                 
                                                 println!("Patching prevbb inside LHS");
@@ -1137,6 +1170,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                     _ => (),
                 }
             }
+            println!("*******************patching bb {:?} with {:?}", &bb, &expected_terminator);
             patch.patch_terminator(bb, expected_terminator);
         }
 
@@ -1146,8 +1180,14 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
             let _size_temp = body.local_decls.push(LocalDecl::new(size_ty, SPANS[0]));
         }
 
+        patch.apply(body);
+        println!("derefs injected.");
+
+        patch = MirPatch::new(body);
+
         // Second, downward, loop to find the first uses of those pointers as well as track their borrows and later uses such as dereferences
         for (bb, data) in body.basic_blocks_mut().iter_enumerated_mut() {
+            println!("bb in second loop: {:?}", &bb);
             for (i, stmt) in data.statements.clone().iter().enumerate().rev() {
                 match stmt {
                     Statement {kind: StatementKind::Assign(box (lhs, rhs)), .. } => {
@@ -1179,8 +1219,10 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                     let from_ref_block;
 
                                     // This block has to point to the next block in the control flow graph (that terminator is an Option type)
-                                    match &data.terminator {
+                                    println!("before ref block");
+                                    match data.terminator.as_ref() {
                                         Some(_x) => {
+                                            println!("ref block for some");
                                             from_ref_block = patch.new_block(BasicBlockData {
                                                 statements: vec![],
                                                 terminator: Some(data.terminator.as_ref().unwrap().clone()),
@@ -1188,6 +1230,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                             });
                                         },
                                         _ => {
+                                            println!("ref block for none");
                                             from_ref_block = patch.new_block(BasicBlockData {
                                                 statements: vec![],
                                                 terminator: None,
@@ -1202,11 +1245,13 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                     let from_ref_terminator = call_from_ref(tcx, *local, root_temps.clone(), root_refs.clone(), &generics_list, from_ref_block);
 
                                     // Insert a new function call to std::mem::size_of for the root type
+                                    println!("before size block");
                                     let size_calc_block = patch.new_block(BasicBlockData {
                                         statements: new_stmts,
                                         terminator: Some(data.terminator.as_ref().unwrap().clone()),
                                         is_cleanup: false,
                                     });
+                                    println!("after size block");
 
                                     // The function may have generic types as its parameters. These need to be statically mentioned if we are injecting a call to it
                                     
@@ -1373,6 +1418,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
 
         // There will be a third loop for executing the drops for all the capabilities (identical to what we originally intended to do in elaborate_drops)
         for (bb, data) in body.basic_blocks_mut().iter_enumerated_mut() {
+            println!("bb in third loop: {:?}", &bb);
             match &data.terminator {
                 Some(x) => {
                     match &x.kind {
@@ -1604,5 +1650,6 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
         }
         
         patch.apply(body);
+        println!("run pass success");
     }
 }
