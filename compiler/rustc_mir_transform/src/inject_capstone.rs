@@ -190,6 +190,9 @@ fn call_size_of<'tcx> (
     let size_calc_const_operand = Box::new(ConstOperand { span: SPANS[0], user_ty: None, const_: size_calc_const_ });
     let size_calc_operand_ = Operand::Constant(size_calc_const_operand);
 
+    println!("local_sizes: {:?}", local_sizes);
+    println!("local: {:?}", local);
+
     let size_calc_dest_place = Place {local: (local_sizes[&local]).into(), projection: List::empty()};
 
     let size_calc_terminator = TerminatorKind::Call {
@@ -558,18 +561,21 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
 
         // Create temporaries that will hold the size of the root type
         let mut local_sizes: FxHashMap<Local, Local> = FxHashMap::default();
+        let mut size_temp: Local = (0 as usize).into();
         for root in alloc_roots.iter() {
             let size_ty = Ty::new(tcx, ty::Uint(ty::UintTy::Usize));
-            let size_temp = body.local_decls.push(LocalDecl::new(size_ty, SPANS[0]));
+            size_temp = body.local_decls.push(LocalDecl::new(size_ty, SPANS[0]));
             local_sizes.insert(*root, size_temp);
         }
         for local in tracked_locals.iter() {
             if !alloc_roots.contains(local) {
                 let size_ty = Ty::new(tcx, ty::Uint(ty::UintTy::Usize));
-                let size_temp = body.local_decls.push(LocalDecl::new(size_ty, SPANS[0]));
+                size_temp = body.local_decls.push(LocalDecl::new(size_ty, SPANS[0]));
                 local_sizes.insert(*local, size_temp);
             }
-        }
+        };
+
+        let mut new_temps_counter = 0;
 
         // References to the temps that are of MutDLTBoundedPointer type
         let mut root_temp_refs: FxHashMap<Local, Local> = FxHashMap::default();
@@ -1018,6 +1024,9 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                         let ty_bool = ty::Const::from_bool(tcx, true);
                                         let g_bool = GenericArg::from(ty_bool);
                                         let generics_list_for_size = [g_root, g_bool];
+
+                                        new_temps_counter += 1;
+                                        local_sizes.insert(local, (usize::from(size_temp) + new_temps_counter).into());
         
                                         let size_calc_terminator = call_size_of(tcx, local, local_sizes.clone(), &generics_list_for_size, size_calc_block);
         
@@ -1129,6 +1138,12 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                 }
             }
             patch.patch_terminator(bb, expected_terminator);
+        }
+
+        // Add the new temporaries to the local_decls
+        for _i in 0..new_temps_counter {
+            let size_ty = Ty::new(tcx, ty::Uint(ty::UintTy::Usize));
+            let _size_temp = body.local_decls.push(LocalDecl::new(size_ty, SPANS[0]));
         }
 
         // Second, downward, loop to find the first uses of those pointers as well as track their borrows and later uses such as dereferences
