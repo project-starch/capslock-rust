@@ -625,15 +625,11 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
 
         for (bb, data) in body.basic_blocks_mut().iter_enumerated_mut() {
             println!("Basic block: {:?}", bb);
-            let mut use_prev_block = false;
-            let mut prev_bb: &BasicBlock = &bb;
+            let mut expected_terminator = data.terminator.as_ref().unwrap().kind.clone();
             let mut deref_block: BasicBlock;
             for (i, stmt) in data.statements.clone().iter().enumerate().rev() {
-                if !use_prev_block {
-                    prev_bb = &bb;
-                }
                 println!("Statement: {:?}", stmt);
-                println!("Prev BB: {:?}", prev_bb);
+                println!("expected terminator: {:?}", expected_terminator);
                 match stmt {
                     Statement { kind: StatementKind::Assign(box (lhs, rhs)), .. } => {
                         let mut roots: Vec<Local>;
@@ -657,23 +653,11 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                     kind: StatementKind::Assign(Box::new((root_temp_refs[&root].into(), Rvalue::Ref(tcx.lifetimes.re_erased, BorrowKind::Mut { kind: MutBorrowKind::Default }, Place { local: root_temps[&root], projection: List::empty() })))),
                                 };
 
-                                let size_calc_block: BasicBlock;
-                                match &data.terminator {
-                                    Some(_x) => {
-                                        size_calc_block = patch.new_block(BasicBlockData {
-                                            statements: vec![new_stmt],
-                                            terminator: Some(data.terminator.as_ref().unwrap().clone()),
-                                            is_cleanup: false,
-                                        });
-                                    },
-                                    _ => {
-                                        size_calc_block = patch.new_block(BasicBlockData {
-                                            statements: vec![new_stmt],
-                                            terminator: None,
-                                            is_cleanup: false,
-                                        });
-                                    },
-                                }
+                                let size_calc_block = patch.new_block(BasicBlockData {
+                                    statements: vec![new_stmt],
+                                    terminator: Some(data.terminator.as_ref().unwrap().clone()),
+                                    is_cleanup: false,
+                                });
 
                                 // The function may have generic types as its parameters. These need to be statically mentioned if we are injecting a call to it
                                 let g_root = root_generics[&root];
@@ -684,7 +668,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                 let size_calc_terminator = call_size_of(tcx, local, local_sizes.clone(), &generics_list_for_size, size_calc_block);
 
                                 println!("Patching prevbb inside LHS");
-                                patch.patch_terminator(*prev_bb, size_calc_terminator);
+                                // patch.patch_terminator(bb, size_calc_terminator);
 
                                 if z == roots.len() - 1 {
                                     deref_block = patch.new_block(BasicBlockData {
@@ -706,14 +690,14 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                 
                                 println!("Patching sizecalcblock inside LHS");
                                 patch.patch_terminator(size_calc_block, deref_terminator);
+                                patch.patch_terminator(deref_block, expected_terminator.clone());
                                 println!("Done patching sizecalcblock inside LHS");
 
-                                prev_bb = &deref_block;
-                                use_prev_block = true;
+                                expected_terminator = size_calc_terminator.clone();
                             }
                         }
                         println!("right hand side: {:?}", &rhs);
-                        println!("prev bb before rhs: {:?}", prev_bb);
+                        println!("terminator before rhs: {:?}", expected_terminator);
                         match rhs {
                             Rvalue::Cast( .., operand, _ty) => {
                                 if {roots = check_operand_depth(&alloc_roots, &mut root_references, &operand); roots.len() > 0} {
@@ -744,17 +728,18 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                                     terminator: Some(data.terminator.as_ref().unwrap().clone()),
                                                     is_cleanup: false,
                                                 });
-
+                
                                                 // The function may have generic types as its parameters. These need to be statically mentioned if we are injecting a call to it
                                                 let g_root = root_generics[&root];
                                                 let ty_bool = ty::Const::from_bool(tcx, true);
                                                 let g_bool = GenericArg::from(ty_bool);
                                                 let generics_list_for_size = [g_root, g_bool];
-
+                
                                                 let size_calc_terminator = call_size_of(tcx, local, local_sizes.clone(), &generics_list_for_size, size_calc_block);
-
-                                                patch.patch_terminator(*prev_bb, size_calc_terminator);
-
+                
+                                                println!("Patching prevbb inside LHS");
+                                                // patch.patch_terminator(bb, size_calc_terminator);
+                
                                                 if z == roots.len() - 1 {
                                                     deref_block = patch.new_block(BasicBlockData {
                                                         statements: new_stmts.clone(),
@@ -769,14 +754,16 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                                         is_cleanup: false,
                                                     });
                                                 }
-
+                
                                                 let generics_list = [dlt_generics[&root], root_generics[&root]];
                                                 let deref_terminator = call_index_mut_bound(tcx, local, *root, root_temp_refs.clone(), local_sizes.clone(), &generics_list, 0, _empty_tuple_temp, deref_block);
                                                 
+                                                println!("Patching sizecalcblock inside LHS");
                                                 patch.patch_terminator(size_calc_block, deref_terminator);
-
-                                                prev_bb = &deref_block;
-                                                use_prev_block = true;
+                                                patch.patch_terminator(deref_block, expected_terminator.clone());
+                                                println!("Done patching sizecalcblock inside LHS");
+                
+                                                expected_terminator = size_calc_terminator.clone();
                                             }
                                         },
                                         _ => (),
@@ -813,17 +800,18 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                                         terminator: Some(data.terminator.as_ref().unwrap().clone()),
                                                         is_cleanup: false,
                                                     });
-    
+                    
                                                     // The function may have generic types as its parameters. These need to be statically mentioned if we are injecting a call to it
                                                     let g_root = root_generics[&root];
                                                     let ty_bool = ty::Const::from_bool(tcx, true);
                                                     let g_bool = GenericArg::from(ty_bool);
                                                     let generics_list_for_size = [g_root, g_bool];
-    
+                    
                                                     let size_calc_terminator = call_size_of(tcx, local, local_sizes.clone(), &generics_list_for_size, size_calc_block);
-    
-                                                    patch.patch_terminator(*prev_bb, size_calc_terminator);
-    
+                    
+                                                    println!("Patching prevbb inside LHS");
+                                                    // patch.patch_terminator(bb, size_calc_terminator);
+                    
                                                     if z == roots.len() - 1 {
                                                         deref_block = patch.new_block(BasicBlockData {
                                                             statements: new_stmts.clone(),
@@ -838,14 +826,16 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                                             is_cleanup: false,
                                                         });
                                                     }
-    
+                    
                                                     let generics_list = [dlt_generics[&root], root_generics[&root]];
                                                     let deref_terminator = call_index_mut_bound(tcx, local, *root, root_temp_refs.clone(), local_sizes.clone(), &generics_list, 0, _empty_tuple_temp, deref_block);
                                                     
+                                                    println!("Patching sizecalcblock inside LHS");
                                                     patch.patch_terminator(size_calc_block, deref_terminator);
-    
-                                                    prev_bb = &deref_block;
-                                                    use_prev_block = true;
+                                                    patch.patch_terminator(deref_block, expected_terminator.clone());
+                                                    println!("Done patching sizecalcblock inside LHS");
+                    
+                                                    expected_terminator = size_calc_terminator.clone();
                                                 }
                                             },
                                             _ => (),
@@ -883,17 +873,18 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                                     terminator: Some(data.terminator.as_ref().unwrap().clone()),
                                                     is_cleanup: false,
                                                 });
-
+                
                                                 // The function may have generic types as its parameters. These need to be statically mentioned if we are injecting a call to it
                                                 let g_root = root_generics[&root];
                                                 let ty_bool = ty::Const::from_bool(tcx, true);
                                                 let g_bool = GenericArg::from(ty_bool);
                                                 let generics_list_for_size = [g_root, g_bool];
-
+                
                                                 let size_calc_terminator = call_size_of(tcx, local, local_sizes.clone(), &generics_list_for_size, size_calc_block);
-
-                                                patch.patch_terminator(*prev_bb, size_calc_terminator);
-
+                
+                                                println!("Patching prevbb inside LHS");
+                                                // patch.patch_terminator(bb, size_calc_terminator);
+                
                                                 if z == roots.len() - 1 {
                                                     deref_block = patch.new_block(BasicBlockData {
                                                         statements: new_stmts.clone(),
@@ -908,14 +899,16 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                                         is_cleanup: false,
                                                     });
                                                 }
-
+                
                                                 let generics_list = [dlt_generics[&root], root_generics[&root]];
                                                 let deref_terminator = call_index_mut_bound(tcx, local, *root, root_temp_refs.clone(), local_sizes.clone(), &generics_list, 0, _empty_tuple_temp, deref_block);
                                                 
+                                                println!("Patching sizecalcblock inside LHS");
                                                 patch.patch_terminator(size_calc_block, deref_terminator);
-
-                                                prev_bb = &deref_block;
-                                                use_prev_block = true;
+                                                patch.patch_terminator(deref_block, expected_terminator.clone());
+                                                println!("Done patching sizecalcblock inside LHS");
+                
+                                                expected_terminator = size_calc_terminator.clone();
                                             }
                                         },
                                         _ => (),
@@ -949,17 +942,18 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                                     terminator: Some(data.terminator.as_ref().unwrap().clone()),
                                                     is_cleanup: false,
                                                 });
-
+                
                                                 // The function may have generic types as its parameters. These need to be statically mentioned if we are injecting a call to it
                                                 let g_root = root_generics[&root];
                                                 let ty_bool = ty::Const::from_bool(tcx, true);
                                                 let g_bool = GenericArg::from(ty_bool);
                                                 let generics_list_for_size = [g_root, g_bool];
-
+                
                                                 let size_calc_terminator = call_size_of(tcx, local, local_sizes.clone(), &generics_list_for_size, size_calc_block);
-
-                                                patch.patch_terminator(*prev_bb, size_calc_terminator);
-
+                
+                                                println!("Patching prevbb inside LHS");
+                                                // patch.patch_terminator(bb, size_calc_terminator);
+                
                                                 if z == roots.len() - 1 {
                                                     deref_block = patch.new_block(BasicBlockData {
                                                         statements: new_stmts.clone(),
@@ -974,14 +968,16 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                                         is_cleanup: false,
                                                     });
                                                 }
-
+                
                                                 let generics_list = [dlt_generics[&root], root_generics[&root]];
                                                 let deref_terminator = call_index_mut_bound(tcx, local, *root, root_temp_refs.clone(), local_sizes.clone(), &generics_list, 0, _empty_tuple_temp, deref_block);
                                                 
+                                                println!("Patching sizecalcblock inside LHS");
                                                 patch.patch_terminator(size_calc_block, deref_terminator);
-
-                                                prev_bb = &deref_block;
-                                                use_prev_block = true;
+                                                patch.patch_terminator(deref_block, expected_terminator.clone());
+                                                println!("Done patching sizecalcblock inside LHS");
+                
+                                                expected_terminator = size_calc_terminator.clone();
                                             }
                                         },
                                         _ => (),
@@ -1016,17 +1012,18 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                             terminator: Some(data.terminator.as_ref().unwrap().clone()),
                                             is_cleanup: false,
                                         });
-
+        
                                         // The function may have generic types as its parameters. These need to be statically mentioned if we are injecting a call to it
                                         let g_root = root_generics[&root];
                                         let ty_bool = ty::Const::from_bool(tcx, true);
                                         let g_bool = GenericArg::from(ty_bool);
                                         let generics_list_for_size = [g_root, g_bool];
-
+        
                                         let size_calc_terminator = call_size_of(tcx, local, local_sizes.clone(), &generics_list_for_size, size_calc_block);
-
-                                        patch.patch_terminator(*prev_bb, size_calc_terminator);
-
+        
+                                        println!("Patching prevbb inside LHS");
+                                        // patch.patch_terminator(bb, size_calc_terminator);
+        
                                         if z == roots.len() - 1 {
                                             deref_block = patch.new_block(BasicBlockData {
                                                 statements: new_stmts.clone(),
@@ -1041,14 +1038,16 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                                 is_cleanup: false,
                                             });
                                         }
-
+        
                                         let generics_list = [dlt_generics[&root], root_generics[&root]];
                                         let deref_terminator = call_index_mut_bound(tcx, local, *root, root_temp_refs.clone(), local_sizes.clone(), &generics_list, 0, _empty_tuple_temp, deref_block);
                                         
+                                        println!("Patching sizecalcblock inside LHS");
                                         patch.patch_terminator(size_calc_block, deref_terminator);
-
-                                        prev_bb = &deref_block;
-                                        use_prev_block = true;
+                                        patch.patch_terminator(deref_block, expected_terminator.clone());
+                                        println!("Done patching sizecalcblock inside LHS");
+        
+                                        expected_terminator = size_calc_terminator.clone();
                                     }
                                 }
                             },
@@ -1081,17 +1080,18 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                                     terminator: Some(data.terminator.as_ref().unwrap().clone()),
                                                     is_cleanup: false,
                                                 });
-
+                
                                                 // The function may have generic types as its parameters. These need to be statically mentioned if we are injecting a call to it
                                                 let g_root = root_generics[&root];
                                                 let ty_bool = ty::Const::from_bool(tcx, true);
                                                 let g_bool = GenericArg::from(ty_bool);
                                                 let generics_list_for_size = [g_root, g_bool];
-
+                
                                                 let size_calc_terminator = call_size_of(tcx, local, local_sizes.clone(), &generics_list_for_size, size_calc_block);
-
-                                                patch.patch_terminator(*prev_bb, size_calc_terminator);
-
+                
+                                                println!("Patching prevbb inside LHS");
+                                                // patch.patch_terminator(bb, size_calc_terminator);
+                
                                                 if z == roots.len() - 1 {
                                                     deref_block = patch.new_block(BasicBlockData {
                                                         statements: new_stmts.clone(),
@@ -1106,14 +1106,16 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                                         is_cleanup: false,
                                                     });
                                                 }
-
+                
                                                 let generics_list = [dlt_generics[&root], root_generics[&root]];
                                                 let deref_terminator = call_index_mut_bound(tcx, local, *root, root_temp_refs.clone(), local_sizes.clone(), &generics_list, 0, _empty_tuple_temp, deref_block);
                                                 
+                                                println!("Patching sizecalcblock inside LHS");
                                                 patch.patch_terminator(size_calc_block, deref_terminator);
-
-                                                prev_bb = &deref_block;
-                                                use_prev_block = true;
+                                                patch.patch_terminator(deref_block, expected_terminator.clone());
+                                                println!("Done patching sizecalcblock inside LHS");
+                
+                                                expected_terminator = size_calc_terminator.clone();
                                             }
                                         },
                                         _ => (),
@@ -1126,6 +1128,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                     _ => (),
                 }
             }
+            patch.patch_terminator(bb, expected_terminator);
         }
 
         // Second, downward, loop to find the first uses of those pointers as well as track their borrows and later uses such as dereferences
