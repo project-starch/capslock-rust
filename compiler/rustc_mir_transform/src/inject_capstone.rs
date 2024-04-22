@@ -272,6 +272,78 @@ fn call_index_mut_bound<'tcx> (
     deref_terminator
 }
 
+fn inject_deref<'tcx> (
+    tcx: TyCtxt<'tcx>, 
+    data: &mut BasicBlockData<'tcx>,
+    stmt: &Statement<'tcx>,
+    local: Local,
+    _empty_tuple_temp: Local,
+    i: usize,
+    size_temp: usize,
+    expected_terminator: &mut TerminatorKind<'tcx>, 
+    patch: &mut MirPatch<'tcx>, 
+    roots: &Vec<Local>, 
+    new_temps_counter: &mut usize, 
+    local_sizes:&mut FxHashMap<Local, Local>,
+    root_temps: &FxHashMap<Local, Local>, 
+    root_temp_refs: &FxHashMap<Local, Local>, 
+    root_generics: &FxHashMap<Local, GenericArg<'tcx>>, 
+    dlt_generics: &FxHashMap<Local, GenericArg<'tcx>> 
+) {
+    // Shift all the statements beyond our target statement to a new vector and clear them from the original block
+    let mut new_stmts = vec![];
+    for (j, stmt) in data.statements.iter_mut().enumerate() {
+        if j > i { 
+            new_stmts.push(stmt.clone());
+            stmt.make_nop();
+        }
+    }
+
+    for (z, root) in roots.iter().enumerate() {
+        // Creating a reference to the MutDLTBoundedPointer that would need to be passed into our target function
+        let new_stmt = Statement {
+            source_info: stmt.source_info,
+            kind: StatementKind::Assign(Box::new((root_temp_refs[&root].into(), Rvalue::Ref(tcx.lifetimes.re_erased, BorrowKind::Mut { kind: MutBorrowKind::Default }, Place { local: root_temps[&root], projection: List::empty() })))),
+        };
+
+        // The function may have generic types as its parameters. These need to be statically mentioned if we are injecting a call to it
+        let g_root = root_generics[&root];
+        let ty_bool = ty::Const::from_bool(tcx, true);
+        let g_bool = GenericArg::from(ty_bool);
+        let generics_list_for_size = [g_root, g_bool];
+        let deref_block: BasicBlock;
+
+        if z == roots.len() - 1 {
+            deref_block = patch.new_block(BasicBlockData {
+                statements: new_stmts.clone(),
+                terminator: Some(data.terminator.as_ref().unwrap().clone()),
+                is_cleanup: false,
+            });
+        }
+        else {
+            deref_block = patch.new_block(BasicBlockData {
+                statements: vec![],
+                terminator: Some(data.terminator.as_ref().unwrap().clone()),
+                is_cleanup: false,
+            });
+        }
+        patch.patch_terminator(deref_block, expected_terminator.clone());
+
+        let generics_list = [dlt_generics[&root], root_generics[&root]];
+        
+        *new_temps_counter += 1;
+        local_sizes.insert(local, (size_temp + *new_temps_counter).into());
+        let deref_terminator = call_index_mut_bound(tcx, local, *root, root_temp_refs.clone(), local_sizes.clone(), &generics_list, 0, _empty_tuple_temp, deref_block);
+        let size_calc_block = patch.new_block(BasicBlockData {
+            statements: vec![new_stmt],
+            terminator: Some(data.terminator.as_ref().unwrap().clone()),
+            is_cleanup: false,
+        });
+        patch.patch_terminator(size_calc_block, deref_terminator);
+        *expected_terminator = call_size_of(tcx, local, local_sizes.clone(), &generics_list_for_size, size_calc_block);
+    }
+}
+
 impl<'tcx> MirPass<'tcx> for InjectCapstone {
     fn run_pass(&self, tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
         println!("run pass start");
@@ -638,7 +710,6 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
         for (bb, data) in body.basic_blocks_mut().iter_enumerated_mut() {
             println!("Basic block: {:?}", bb);
             let mut expected_terminator = data.terminator.as_ref().unwrap().kind.clone();
-            let mut deref_block: BasicBlock;
             for (i, stmt) in data.statements.clone().iter().enumerate().rev() {
                 println!("Statement: {:?}", stmt);
                 println!("expected terminator: {:?}", expected_terminator);
@@ -649,57 +720,8 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                             println!("Requires LHS deref: {:?}", &lhs);
                             let local = lhs.local.clone();
 
-                            // Shift all the statements beyond our target statement to a new vector and clear them from the original block
-                            let mut new_stmts = vec![];
-                            for (j, stmt) in data.statements.iter_mut().enumerate() {
-                                if j > i { 
-                                    new_stmts.push(stmt.clone());
-                                    stmt.make_nop();
-                                }
-                            }
-
-                            for (z, root) in roots.iter().enumerate() {
-                                // Creating a reference to the MutDLTBoundedPointer that would need to be passed into our target function
-                                let new_stmt = Statement {
-                                    source_info: stmt.source_info,
-                                    kind: StatementKind::Assign(Box::new((root_temp_refs[&root].into(), Rvalue::Ref(tcx.lifetimes.re_erased, BorrowKind::Mut { kind: MutBorrowKind::Default }, Place { local: root_temps[&root], projection: List::empty() })))),
-                                };
-
-                                // The function may have generic types as its parameters. These need to be statically mentioned if we are injecting a call to it
-                                let g_root = root_generics[&root];
-                                let ty_bool = ty::Const::from_bool(tcx, true);
-                                let g_bool = GenericArg::from(ty_bool);
-                                let generics_list_for_size = [g_root, g_bool];
-
-                                if z == roots.len() - 1 {
-                                    deref_block = patch.new_block(BasicBlockData {
-                                        statements: new_stmts.clone(),
-                                        terminator: Some(data.terminator.as_ref().unwrap().clone()),
-                                        is_cleanup: false,
-                                    });
-                                }
-                                else {
-                                    deref_block = patch.new_block(BasicBlockData {
-                                        statements: vec![],
-                                        terminator: Some(data.terminator.as_ref().unwrap().clone()),
-                                        is_cleanup: false,
-                                    });
-                                }
-                                patch.patch_terminator(deref_block, expected_terminator.clone());
-
-                                let generics_list = [dlt_generics[&root], root_generics[&root]];
-                                
-                                new_temps_counter += 1;
-                                local_sizes.insert(local, (size_temp + new_temps_counter).into());
-                                let deref_terminator = call_index_mut_bound(tcx, local, *root, root_temp_refs.clone(), local_sizes.clone(), &generics_list, 0, _empty_tuple_temp, deref_block);
-                                let size_calc_block = patch.new_block(BasicBlockData {
-                                    statements: vec![new_stmt],
-                                    terminator: Some(data.terminator.as_ref().unwrap().clone()),
-                                    is_cleanup: false,
-                                });
-                                patch.patch_terminator(size_calc_block, deref_terminator);
-                                expected_terminator = call_size_of(tcx, local, local_sizes.clone(), &generics_list_for_size, size_calc_block);
-                            }
+                            inject_deref(tcx, data, &stmt, local, _empty_tuple_temp, i, size_temp, &mut expected_terminator, &mut patch, &roots, 
+                                &mut new_temps_counter, &mut local_sizes, &root_temps, &root_temp_refs, &root_generics, &dlt_generics);
                         }
                         println!("right hand side: {:?}", &rhs);
                         println!("terminator before rhs: {:?}", expected_terminator);
@@ -711,57 +733,8 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                         &Operand::Copy(place) | &Operand::Move(place) => {
                                             let local = place.local.clone();
                                             
-                                            // Shift all the statements beyond our target statement to a new vector and clear them from the original block
-                                            let mut new_stmts = vec![];
-                                            for (j, stmt) in data.statements.iter_mut().enumerate() {
-                                                if j > i { 
-                                                    new_stmts.push(stmt.clone());
-                                                    stmt.make_nop();
-                                                }
-                                            }
-
-                                            for (z, root) in roots.iter().enumerate() {
-                                                // Creating a reference to the MutDLTBoundedPointer that would need to be passed into our target function
-                                                let new_stmt = Statement {
-                                                    source_info: stmt.source_info,
-                                                    kind: StatementKind::Assign(Box::new((root_temp_refs[&root].into(), Rvalue::Ref(tcx.lifetimes.re_erased, BorrowKind::Mut { kind: MutBorrowKind::Default }, Place { local: root_temps[&root], projection: List::empty() })))),
-                                                };
-                
-                                                // The function may have generic types as its parameters. These need to be statically mentioned if we are injecting a call to it
-                                                let g_root = root_generics[&root];
-                                                let ty_bool = ty::Const::from_bool(tcx, true);
-                                                let g_bool = GenericArg::from(ty_bool);
-                                                let generics_list_for_size = [g_root, g_bool];
-
-                                                if z == roots.len() - 1 {
-                                                    deref_block = patch.new_block(BasicBlockData {
-                                                        statements: new_stmts.clone(),
-                                                        terminator: Some(data.terminator.as_ref().unwrap().clone()),
-                                                        is_cleanup: false,
-                                                    });
-                                                }
-                                                else {
-                                                    deref_block = patch.new_block(BasicBlockData {
-                                                        statements: vec![],
-                                                        terminator: Some(data.terminator.as_ref().unwrap().clone()),
-                                                        is_cleanup: false,
-                                                    });
-                                                }
-                                                patch.patch_terminator(deref_block, expected_terminator.clone());
-
-                                                let generics_list = [dlt_generics[&root], root_generics[&root]];
-                                                
-                                                new_temps_counter += 1;
-                                                local_sizes.insert(local, (size_temp + new_temps_counter).into());
-                                                let deref_terminator = call_index_mut_bound(tcx, local, *root, root_temp_refs.clone(), local_sizes.clone(), &generics_list, 0, _empty_tuple_temp, deref_block);
-                                                let size_calc_block = patch.new_block(BasicBlockData {
-                                                    statements: vec![new_stmt],
-                                                    terminator: Some(data.terminator.as_ref().unwrap().clone()),
-                                                    is_cleanup: false,
-                                                });
-                                                patch.patch_terminator(size_calc_block, deref_terminator);
-                                                expected_terminator = call_size_of(tcx, local, local_sizes.clone(), &generics_list_for_size, size_calc_block);
-                                            }
+                                            inject_deref(tcx, data, &stmt, local, _empty_tuple_temp, i, size_temp, &mut expected_terminator, &mut patch, &roots, 
+                                                &mut new_temps_counter, &mut local_sizes, &root_temps, &root_temp_refs, &root_generics, &dlt_generics);
                                         },
                                         _ => (),
                                     }
@@ -775,56 +748,8 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                             &Operand::Copy(place) | &Operand::Move(place) => {
                                                 let local = place.local.clone();
                                                 
-                                                // Shift all the statements beyond our target statement to a new vector and clear them from the original block
-                                                let mut new_stmts = vec![];
-                                                for (j, stmt) in data.statements.iter_mut().enumerate() {
-                                                    if j > i { 
-                                                        new_stmts.push(stmt.clone());
-                                                        stmt.make_nop();
-                                                    }
-                                                }
-    
-                                                for (z, root) in roots.iter().enumerate() {
-                                                    // Creating a reference to the MutDLTBoundedPointer that would need to be passed into our target function
-                                                    let new_stmt = Statement {
-                                                        source_info: stmt.source_info,
-                                                        kind: StatementKind::Assign(Box::new((root_temp_refs[&root].into(), Rvalue::Ref(tcx.lifetimes.re_erased, BorrowKind::Mut { kind: MutBorrowKind::Default }, Place { local: root_temps[&root], projection: List::empty() })))),
-                                                    };
-    
-                                                    let g_root = root_generics[&root];
-                                                    let ty_bool = ty::Const::from_bool(tcx, true);
-                                                    let g_bool = GenericArg::from(ty_bool);
-                                                    let generics_list_for_size = [g_root, g_bool];
-
-                                                    if z == roots.len() - 1 {
-                                                        deref_block = patch.new_block(BasicBlockData {
-                                                            statements: new_stmts.clone(),
-                                                            terminator: Some(data.terminator.as_ref().unwrap().clone()),
-                                                            is_cleanup: false,
-                                                        });
-                                                    }
-                                                    else {
-                                                        deref_block = patch.new_block(BasicBlockData {
-                                                            statements: vec![],
-                                                            terminator: Some(data.terminator.as_ref().unwrap().clone()),
-                                                            is_cleanup: false,
-                                                        });
-                                                    }
-                                                    patch.patch_terminator(deref_block, expected_terminator.clone());
-
-                                                    let generics_list = [dlt_generics[&root], root_generics[&root]];
-                                                    
-                                                    new_temps_counter += 1;
-                                                    local_sizes.insert(local, (size_temp + new_temps_counter).into());
-                                                    let deref_terminator = call_index_mut_bound(tcx, local, *root, root_temp_refs.clone(), local_sizes.clone(), &generics_list, 0, _empty_tuple_temp, deref_block);
-                                                    let size_calc_block = patch.new_block(BasicBlockData {
-                                                        statements: vec![new_stmt],
-                                                        terminator: Some(data.terminator.as_ref().unwrap().clone()),
-                                                        is_cleanup: false,
-                                                    });
-                                                    patch.patch_terminator(size_calc_block, deref_terminator);
-                                                    expected_terminator = call_size_of(tcx, local, local_sizes.clone(), &generics_list_for_size, size_calc_block);
-                                                }
+                                                inject_deref(tcx, data, &stmt, local, _empty_tuple_temp, i, size_temp, &mut expected_terminator, &mut patch, &roots, 
+                                                    &mut new_temps_counter, &mut local_sizes, &root_temps, &root_temp_refs, &root_generics, &dlt_generics);
                                             },
                                             _ => (),
                                         }
@@ -839,56 +764,8 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                         Operand::Copy(place) | Operand::Move(place) => {
                                             let local = place.local.clone();
                                             
-                                            // Shift all the statements beyond our target statement to a new vector and clear them from the original block
-                                            let mut new_stmts = vec![];
-                                            for (j, stmt) in data.statements.iter_mut().enumerate() {
-                                                if j > i { 
-                                                    new_stmts.push(stmt.clone());
-                                                    stmt.make_nop();
-                                                }
-                                            }
-
-                                            for (z, root) in roots.iter().enumerate() {
-                                                // Creating a reference to the MutDLTBoundedPointer that would need to be passed into our target function
-                                                let new_stmt = Statement {
-                                                    source_info: stmt.source_info,
-                                                    kind: StatementKind::Assign(Box::new((root_temp_refs[&root].into(), Rvalue::Ref(tcx.lifetimes.re_erased, BorrowKind::Mut { kind: MutBorrowKind::Default }, Place { local: root_temps[&root], projection: List::empty() })))),
-                                                };
-
-                                                let g_root = root_generics[&root];
-                                                let ty_bool = ty::Const::from_bool(tcx, true);
-                                                let g_bool = GenericArg::from(ty_bool);
-                                                let generics_list_for_size = [g_root, g_bool];
-
-                                                if z == roots.len() - 1 {
-                                                    deref_block = patch.new_block(BasicBlockData {
-                                                        statements: new_stmts.clone(),
-                                                        terminator: Some(data.terminator.as_ref().unwrap().clone()),
-                                                        is_cleanup: false,
-                                                    });
-                                                }
-                                                else {
-                                                    deref_block = patch.new_block(BasicBlockData {
-                                                        statements: vec![],
-                                                        terminator: Some(data.terminator.as_ref().unwrap().clone()),
-                                                        is_cleanup: false,
-                                                    });
-                                                }
-                                                patch.patch_terminator(deref_block, expected_terminator.clone());
-
-                                                let generics_list = [dlt_generics[&root], root_generics[&root]];
-                                                
-                                                new_temps_counter += 1;
-                                                local_sizes.insert(local, (size_temp + new_temps_counter).into());
-                                                let deref_terminator = call_index_mut_bound(tcx, local, *root, root_temp_refs.clone(), local_sizes.clone(), &generics_list, 0, _empty_tuple_temp, deref_block);
-                                                let size_calc_block = patch.new_block(BasicBlockData {
-                                                    statements: vec![new_stmt],
-                                                    terminator: Some(data.terminator.as_ref().unwrap().clone()),
-                                                    is_cleanup: false,
-                                                });
-                                                patch.patch_terminator(size_calc_block, deref_terminator);
-                                                expected_terminator = call_size_of(tcx, local, local_sizes.clone(), &generics_list_for_size, size_calc_block);
-                                            }
+                                            inject_deref(tcx, data, &stmt, local, _empty_tuple_temp, i, size_temp, &mut expected_terminator, &mut patch, &roots, 
+                                                &mut new_temps_counter, &mut local_sizes, &root_temps, &root_temp_refs, &root_generics, &dlt_generics);
                                         },
                                         _ => (),
                                     }
@@ -899,56 +776,8 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                         Operand::Copy(place) | Operand::Move(place) => {
                                             let local = place.local.clone();
                                             
-                                            // Shift all the statements beyond our target statement to a new vector and clear them from the original block
-                                            let mut new_stmts = vec![];
-                                            for (j, stmt) in data.statements.iter_mut().enumerate() {
-                                                if j > i { 
-                                                    new_stmts.push(stmt.clone());
-                                                    stmt.make_nop();
-                                                }
-                                            }
-
-                                            for (z, root) in roots.iter().enumerate() {
-                                                // Creating a reference to the MutDLTBoundedPointer that would need to be passed into our target function
-                                                let new_stmt = Statement {
-                                                    source_info: stmt.source_info,
-                                                    kind: StatementKind::Assign(Box::new((root_temp_refs[&root].into(), Rvalue::Ref(tcx.lifetimes.re_erased, BorrowKind::Mut { kind: MutBorrowKind::Default }, Place { local: root_temps[&root], projection: List::empty() })))),
-                                                };
-
-                                                let g_root = root_generics[&root];
-                                                let ty_bool = ty::Const::from_bool(tcx, true);
-                                                let g_bool = GenericArg::from(ty_bool);
-                                                let generics_list_for_size = [g_root, g_bool];
-
-                                                if z == roots.len() - 1 {
-                                                    deref_block = patch.new_block(BasicBlockData {
-                                                        statements: new_stmts.clone(),
-                                                        terminator: Some(data.terminator.as_ref().unwrap().clone()),
-                                                        is_cleanup: false,
-                                                    });
-                                                }
-                                                else {
-                                                    deref_block = patch.new_block(BasicBlockData {
-                                                        statements: vec![],
-                                                        terminator: Some(data.terminator.as_ref().unwrap().clone()),
-                                                        is_cleanup: false,
-                                                    });
-                                                }
-                                                patch.patch_terminator(deref_block, expected_terminator.clone());
-
-                                                let generics_list = [dlt_generics[&root], root_generics[&root]];
-                                                
-                                                new_temps_counter += 1;
-                                                local_sizes.insert(local, (size_temp + new_temps_counter).into());
-                                                let deref_terminator = call_index_mut_bound(tcx, local, *root, root_temp_refs.clone(), local_sizes.clone(), &generics_list, 0, _empty_tuple_temp, deref_block);
-                                                let size_calc_block = patch.new_block(BasicBlockData {
-                                                    statements: vec![new_stmt],
-                                                    terminator: Some(data.terminator.as_ref().unwrap().clone()),
-                                                    is_cleanup: false,
-                                                });
-                                                patch.patch_terminator(size_calc_block, deref_terminator);
-                                                expected_terminator = call_size_of(tcx, local, local_sizes.clone(), &generics_list_for_size, size_calc_block);
-                                            }
+                                            inject_deref(tcx, data, &stmt, local, _empty_tuple_temp, i, size_temp, &mut expected_terminator, &mut patch, &roots, 
+                                                &mut new_temps_counter, &mut local_sizes, &root_temps, &root_temp_refs, &root_generics, &dlt_generics);
                                         },
                                         _ => (),
                                     }
@@ -960,56 +789,8 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                     println!("Requires Place deref: {:?}", &place);
                                     let local = place.local.clone();
                                     
-                                    // Shift all the statements beyond our target statement to a new vector and clear them from the original block
-                                    let mut new_stmts = vec![];
-                                    for (j, stmt) in data.statements.iter_mut().enumerate() {
-                                        if j > i { 
-                                            new_stmts.push(stmt.clone());
-                                            stmt.make_nop();
-                                        }
-                                    }
-
-                                    for (z, root) in roots.iter().enumerate() {
-                                        // Creating a reference to the MutDLTBoundedPointer that would need to be passed into our target function
-                                        let new_stmt = Statement {
-                                            source_info: stmt.source_info,
-                                            kind: StatementKind::Assign(Box::new((root_temp_refs[&root].into(), Rvalue::Ref(tcx.lifetimes.re_erased, BorrowKind::Mut { kind: MutBorrowKind::Default }, Place { local: root_temps[&root], projection: List::empty() })))),
-                                        };
-
-                                        let g_root = root_generics[&root];
-                                        let ty_bool = ty::Const::from_bool(tcx, true);
-                                        let g_bool = GenericArg::from(ty_bool);
-                                        let generics_list_for_size = [g_root, g_bool];
-
-                                        if z == roots.len() - 1 {
-                                            deref_block = patch.new_block(BasicBlockData {
-                                                statements: new_stmts.clone(),
-                                                terminator: Some(data.terminator.as_ref().unwrap().clone()),
-                                                is_cleanup: false,
-                                            });
-                                        }
-                                        else {
-                                            deref_block = patch.new_block(BasicBlockData {
-                                                statements: vec![],
-                                                terminator: Some(data.terminator.as_ref().unwrap().clone()),
-                                                is_cleanup: false,
-                                            });
-                                        }
-                                        patch.patch_terminator(deref_block, expected_terminator.clone());
-
-                                        let generics_list = [dlt_generics[&root], root_generics[&root]];
-                                        
-                                        new_temps_counter += 1;
-                                        local_sizes.insert(local, (size_temp + new_temps_counter).into());
-                                        let deref_terminator = call_index_mut_bound(tcx, local, *root, root_temp_refs.clone(), local_sizes.clone(), &generics_list, 0, _empty_tuple_temp, deref_block);
-                                        let size_calc_block = patch.new_block(BasicBlockData {
-                                            statements: vec![new_stmt],
-                                            terminator: Some(data.terminator.as_ref().unwrap().clone()),
-                                            is_cleanup: false,
-                                        });
-                                        patch.patch_terminator(size_calc_block, deref_terminator);
-                                        expected_terminator = call_size_of(tcx, local, local_sizes.clone(), &generics_list_for_size, size_calc_block);
-                                    }
+                                    inject_deref(tcx, data, &stmt, local, _empty_tuple_temp, i, size_temp, &mut expected_terminator, &mut patch, &roots, 
+                                        &mut new_temps_counter, &mut local_sizes, &root_temps, &root_temp_refs, &root_generics, &dlt_generics);
                                 }
                             },
                             Rvalue::Repeat(operand, ..) | Rvalue::ShallowInitBox(operand, ..) | Rvalue::UnaryOp(.., operand) | Rvalue::Use(operand) => {
@@ -1019,56 +800,8 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                         &Operand::Copy(place) | &Operand::Move(place) => {
                                             let local = place.local.clone();
                                             
-                                            // Shift all the statements beyond our target statement to a new vector and clear them from the original block
-                                            let mut new_stmts = vec![];
-                                            for (j, stmt) in data.statements.iter_mut().enumerate() {
-                                                if j > i { 
-                                                    new_stmts.push(stmt.clone());
-                                                    stmt.make_nop();
-                                                }
-                                            }
-
-                                            for (z, root) in roots.iter().enumerate() {
-                                                // Creating a reference to the MutDLTBoundedPointer that would need to be passed into our target function
-                                                let new_stmt = Statement {
-                                                    source_info: stmt.source_info,
-                                                    kind: StatementKind::Assign(Box::new((root_temp_refs[&root].into(), Rvalue::Ref(tcx.lifetimes.re_erased, BorrowKind::Mut { kind: MutBorrowKind::Default }, Place { local: root_temps[&root], projection: List::empty() })))),
-                                                };
-
-                                                let g_root = root_generics[&root];
-                                                let ty_bool = ty::Const::from_bool(tcx, true);
-                                                let g_bool = GenericArg::from(ty_bool);
-                                                let generics_list_for_size = [g_root, g_bool];
-
-                                                if z == roots.len() - 1 {
-                                                    deref_block = patch.new_block(BasicBlockData {
-                                                        statements: new_stmts.clone(),
-                                                        terminator: Some(data.terminator.as_ref().unwrap().clone()),
-                                                        is_cleanup: false,
-                                                    });
-                                                }
-                                                else {
-                                                    deref_block = patch.new_block(BasicBlockData {
-                                                        statements: vec![],
-                                                        terminator: Some(data.terminator.as_ref().unwrap().clone()),
-                                                        is_cleanup: false,
-                                                    });
-                                                }
-                                                patch.patch_terminator(deref_block, expected_terminator.clone());
-
-                                                let generics_list = [dlt_generics[&root], root_generics[&root]];
-                                                
-                                                new_temps_counter += 1;
-                                                local_sizes.insert(local, (size_temp + new_temps_counter).into());
-                                                let deref_terminator = call_index_mut_bound(tcx, local, *root, root_temp_refs.clone(), local_sizes.clone(), &generics_list, 0, _empty_tuple_temp, deref_block);
-                                                let size_calc_block = patch.new_block(BasicBlockData {
-                                                    statements: vec![new_stmt],
-                                                    terminator: Some(data.terminator.as_ref().unwrap().clone()),
-                                                    is_cleanup: false,
-                                                });
-                                                patch.patch_terminator(size_calc_block, deref_terminator);
-                                                expected_terminator = call_size_of(tcx, local, local_sizes.clone(), &generics_list_for_size, size_calc_block);
-                                            }
+                                            inject_deref(tcx, data, &stmt, local, _empty_tuple_temp, i, size_temp, &mut expected_terminator, &mut patch, &roots, 
+                                                &mut new_temps_counter, &mut local_sizes, &root_temps, &root_temp_refs, &root_generics, &dlt_generics);
                                         },
                                         _ => (),
                                     }
