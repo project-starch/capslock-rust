@@ -1,4 +1,5 @@
 use std::cmp::max;
+use std::collections::VecDeque;
 use crate::MirPass;
 use rustc_ast::Mutability;
 // use rustc_ast::InlineAsmOptions;
@@ -15,12 +16,12 @@ use crate::Spanned;
 // use rustc_middle::mir::{dump_mir, PassWhere};
 use rustc_middle::mir::{
     /*traversal,*/ Body, LocalDecl, Local, InlineAsmOperand, /*LocalKind, Location,*/ BasicBlockData, Place, UnwindAction, CallSource, CastKind, Rvalue, 
-    Statement, StatementKind, TerminatorKind, Operand, Const, ConstValue, ConstOperand, BorrowKind, MutBorrowKind, BasicBlock
+    Statement, StatementKind, TerminatorKind, /*UnwindTerminateReason,*/ Operand, Const, ConstValue, ConstOperand, BorrowKind, MutBorrowKind, BasicBlock, START_BLOCK
 };
 use rustc_middle::mir::interpret::Scalar;
 // use crate::ty::ty_kind;
 use rustc_middle::ty::{self, ScalarInt, TyCtxt};
-use rustc_data_structures::fx::FxHashMap;
+use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 // use crate::ty::BorrowKind;
 // use rustc_mir_dataflow::impls::MaybeLiveLocals;
 // use rustc_mir_dataflow::points::{/*save_as_intervals,*/ DenseLocationMap, PointIndex};
@@ -270,6 +271,57 @@ fn call_index_mut_bound<'tcx> (
     };
 
     deref_terminator
+}
+
+fn call_invalidate<'tcx> (
+    tcx: TyCtxt<'tcx>, 
+    root: Local, 
+    root_temp_refs: FxHashMap<Local, Local>,
+    generics_list: &[rustc_middle::ty::GenericArg<'tcx>; 1], 
+    dest_local: Local, 
+    invalidate_block: BasicBlock
+) -> TerminatorKind<'tcx> {
+    // Here we determine which function to target for the injection, using its crate number and definition index (which are statically fixed)
+    let crate_num = CrateNum::new(20);
+    let def_index = DefIndex::from_usize(0);
+    let mut _def_id = DefId { krate: crate_num, index: def_index };
+    let mut _def_id_int = 0;
+    let mut name = tcx.def_path_str(_def_id);
+    
+    while name != "MutDLTBoundedPointer::<T>::invalidate" {
+        _def_id_int += 1;
+        _def_id = DefId { krate: CrateNum::new(20), index: DefIndex::from_usize(_def_id_int) };
+        name = tcx.def_path_str(_def_id);
+    }
+    if name != "MutDLTBoundedPointer::<T>::invalidate" {
+        println!("%$%$%$%$% Corrupted RaptureCell definition: {}", name);
+    }
+
+    let generic_args: &rustc_middle::ty::List<GenericArg<'_>> = tcx.mk_args(generics_list); 
+
+    // Creating the sugar of all the structures for the function type to be injected
+    let ty_ = Ty::new(tcx, ty::FnDef(_def_id, generic_args));
+    let const_ = Const::Val(ConstValue::ZeroSized, ty_);
+    let const_operand = Box::new(ConstOperand { span: SPANS[0], user_ty: None, const_: const_ });
+    let operand_ = Operand::Constant(const_operand);
+    let dest_place = Place {local: (dest_local).into(), projection: List::empty()};
+
+    // This is how we create the arguments to be passed to the function that we are calling
+    let operand_input = Operand::Move(Place {local: (root_temp_refs[&root]).into(), projection: List::empty()});
+    let spanned_operand = Spanned { span: SPANS[0], node: operand_input };
+
+    // Create a block terminator that will execute the function call we want to inject
+    let intermediary_terminator = TerminatorKind::Call {
+        func: operand_,
+        args: vec![spanned_operand],
+        destination: dest_place,
+        target: Some(invalidate_block),
+        unwind: UnwindAction::Continue,
+        call_source: CallSource::Normal,
+        fn_span: SPANS[0],
+    };
+
+    intermediary_terminator
 }
 
 fn inject_deref<'tcx> (
@@ -1059,53 +1111,190 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
         }
 
 
-        // There will be a third loop for executing the drops for all the capabilities (identical to what we originally intended to do in elaborate_drops)
-        for (bb, data) in body.basic_blocks_mut().iter_enumerated_mut() {
-            println!("bb in third loop: {:?}", &bb);
+        patch.apply(body);
+        patch = MirPatch::new(body);
+
+        // Traverse the basic blocks in DFS order by following the targets of the terminators
+        
+        let mut active_root_refs: Vec<Local> = vec![];
+        let mut active_root_refs_per_return_point: FxHashMap<BasicBlock, Vec<Local>> = FxHashMap::default();
+        let mut visited_blocks = FxHashSet::default();
+        let mut return_points = FxHashSet::default();
+
+        let mut stack = VecDeque::new();
+
+        // Start with the first basic block
+        stack.push_front(START_BLOCK);
+
+        println!("\n!!!$ Starting DFS transit: \n");
+        while !stack.is_empty() {
+            let bb = stack.pop_front().unwrap();
+            let data = &body.basic_blocks[bb];
+
+            visited_blocks.insert(bb);
+            println!("bb in DFS loop: {:?}", &bb);
+
             match &data.terminator {
                 Some(x) => {
+                    for target in x.successors() {
+                        if !visited_blocks.contains(&target) && !stack.contains(&target) {
+                            stack.push_front(target);
+                        }
+                    }
+
                     match &x.kind {
-                        TerminatorKind::Drop { place, target, unwind, replace } => {
-                            // Retrieve the associated capability using the two hash maps
-                            // Inject inline asm to execute the drop on that capability
-                            if alloc_roots.contains(&(place.local)) {
-                                // Create a block terminator that will execute the function call we want to inject
-                                let drop_terminator = TerminatorKind::Drop {
-                                    place: place.clone(),
-                                    target: target.clone(),
-                                    unwind: unwind.clone(),
-                                    replace: replace.clone(),
-                                };
-
-                                // Shift all the statements beyond our target statement to a new vector and clear them from the original block
-                                let new_stmts = vec![];
-
-                                // Create an intermediary block that will be inserted between the current block and the next block
-                                let drop_block = patch.new_block(BasicBlockData {
-                                    statements: new_stmts,
-                                    terminator: Some(data.terminator.as_ref().unwrap().clone()),
-                                    is_cleanup: data.is_cleanup.clone(),
-                                });
-
-                                patch.patch_terminator(drop_block, drop_terminator);
-
-                                let new_terminator = TerminatorKind::Drop {
-                                    place: Place { local: (root_temps[&place.local]).into(), projection: List::empty() },
-                                    target: drop_block,
-                                    unwind: unwind.clone(),
-                                    replace: replace.clone(),
-                                };
-
-                                // The current basic block's terminator is now replaced with the one we just created (which shifts the control flow to the intermediary block)
-                                patch.patch_terminator(bb, new_terminator);
-                            }
+                        TerminatorKind::Call {func, destination, ..} => {
+                            match func {
+                                Operand::Constant(c) => {
+                                    match c.const_ {
+                                        Const::Val(_constval, ty) => {
+                                            match ty.kind() {
+                                                ty::FnDef(_def_id, _) => {
+                                                    if tcx.def_path_str(_def_id) == "MutDLTBoundedPointer::<T>::from_ref" {
+                                                        println!("Found a call for from_ref: {:?}", destination);
+                                                        if !active_root_refs.contains(&destination.local) {
+                                                            active_root_refs.push(destination.local.clone());
+                                                        }
+                                                    }
+                                                },
+                                                _ => (),
+                                            }
+                                        },
+                                        _ => (),
+                                    }
+                                },
+                                _ => (),
+                            };
                         },
-                        _ => (),
+
+                        // Return points for the given function
+                        TerminatorKind::Return => {
+                            return_points.insert(bb);
+                            active_root_refs_per_return_point.insert(bb, active_root_refs.clone());
+                        },
+                        TerminatorKind::UnwindTerminate(_) => {
+                            return_points.insert(bb);
+                            active_root_refs_per_return_point.insert(bb, active_root_refs.clone());
+                        },
+                        TerminatorKind::UnwindResume => {
+                            return_points.insert(bb);
+                            active_root_refs_per_return_point.insert(bb, active_root_refs.clone());
+                        },
+                        TerminatorKind::CoroutineDrop => {
+                            return_points.insert(bb);
+                            active_root_refs_per_return_point.insert(bb, active_root_refs.clone());
+                        },
+                        _ => {},
                     }
                 },
-                _ => {}
+                _ => (),
             }
         }
+
+        println!("\n !!!$ Return points: {:?}", return_points);
+        println!("\n !!!$ Active root refs per return point: {:?}", active_root_refs_per_return_point);
+
+        for (bb, data) in body.basic_blocks_mut().iter_enumerated_mut() {
+            if active_root_refs_per_return_point.contains_key(&bb) {
+                let mut expected_terminator = data.terminator.as_ref().unwrap().kind.clone();
+                for root_temp in active_root_refs_per_return_point.get(&bb).unwrap().iter() {
+                    println!("********perform drop for root, {:?}", root_temp);
+                    // The following code injects drop and invalidate for some root allocation local. Right now they are unreachable in the CFG and only go to themselvers.
+                    // The target location block is to be decided given the search for termination blocks.
+                    let mut root = root_temp.clone();
+                    for root_local in alloc_roots.iter() {
+                        if root_temps[root_local] == *root_temp {
+                            root = root_local.clone();
+                            break;
+                        }
+                    }
+
+                    let new_stmt = Statement {
+                        source_info: data.terminator.as_ref().unwrap().source_info,
+                        kind: StatementKind::Assign(Box::new((root_temp_refs[&root].into(), Rvalue::Ref(tcx.lifetimes.re_erased, BorrowKind::Mut { kind: MutBorrowKind::Default }, Place { local: root_temps[&root], projection: List::empty() })))),
+                    };
+                    
+                    let invalidate_block = patch.new_block(BasicBlockData {
+                        statements: vec![],
+                        terminator: Some(data.terminator.as_ref().unwrap().clone()),
+                        is_cleanup: false,
+                    });
+
+                    let g_root = root_generics[&root];
+                    let generics_list = [g_root];
+                    let invalidate_terminator = call_invalidate(tcx, root, root_temp_refs.clone(), &generics_list, _empty_tuple_temp, invalidate_block);
+                    
+                    let drop_place = Place {local: (root_temps[&root]).into(), projection: List::empty()};
+                    
+                    let drop_block = patch.new_block(BasicBlockData {
+                        statements: vec![],
+                        terminator: Some(data.terminator.as_ref().unwrap().clone()),
+                        is_cleanup: false,
+                    });
+
+                    let drop_terminator = TerminatorKind::Drop {
+                        place: drop_place,
+                        target: drop_block, // TODO: placeholder
+                        unwind: UnwindAction::Continue,
+                        replace: false,
+                    };
+
+                    patch.patch_terminator(invalidate_block, drop_terminator);
+                    patch.patch_terminator(drop_block, expected_terminator.clone());
+                    expected_terminator = invalidate_terminator.clone();
+                    data.statements.push(new_stmt);
+                }
+                patch.patch_terminator(bb, expected_terminator);
+            }
+        }
+        
+        // There will be a third loop for executing the drops for all the capabilities (identical to what we originally intended to do in elaborate_drops)
+        // for (bb, data) in body.basic_blocks_mut().iter_enumerated_mut() {
+        //     println!("bb in third loop: {:?}", &bb);
+        //     match &data.terminator {
+        //         Some(x) => {
+        //             match &x.kind {
+        //                 TerminatorKind::Drop { place, target, unwind, replace } => {
+        //                     // Retrieve the associated capability using the two hash maps
+        //                     // Inject inline asm to execute the drop on that capability
+        //                     if alloc_roots.contains(&(place.local)) {
+        //                         // Create a block terminator that will execute the function call we want to inject
+        //                         let drop_terminator = TerminatorKind::Drop {
+        //                             place: place.clone(),
+        //                             target: target.clone(),
+        //                             unwind: unwind.clone(),
+        //                             replace: replace.clone(),
+        //                         };
+
+        //                         // Shift all the statements beyond our target statement to a new vector and clear them from the original block
+        //                         let new_stmts = vec![];
+
+        //                         // Create an intermediary block that will be inserted between the current block and the next block
+        //                         let drop_block = patch.new_block(BasicBlockData {
+        //                             statements: new_stmts,
+        //                             terminator: Some(data.terminator.as_ref().unwrap().clone()),
+        //                             is_cleanup: data.is_cleanup.clone(),
+        //                         });
+
+        //                         patch.patch_terminator(drop_block, drop_terminator);
+
+        //                         let new_terminator = TerminatorKind::Drop {
+        //                             place: Place { local: (root_temps[&place.local]).into(), projection: List::empty() },
+        //                             target: drop_block,
+        //                             unwind: unwind.clone(),
+        //                             replace: replace.clone(),
+        //                         };
+
+        //                         // The current basic block's terminator is now replaced with the one we just created (which shifts the control flow to the intermediary block)
+        //                         patch.patch_terminator(bb, new_terminator);
+        //                     }
+        //                 },
+        //                 _ => (),
+        //             }
+        //         },
+        //         _ => {}
+        //     }
+        // }
         
 
         // For reference, printing the contents of each basic block in the body of this function
