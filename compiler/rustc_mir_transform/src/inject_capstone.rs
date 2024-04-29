@@ -127,10 +127,11 @@ fn call_from_ref<'tcx> (
     root_refs: FxHashMap<Local, Local>, 
     generics_list: &[rustc_middle::ty::GenericArg<'tcx>; 1], 
     from_ref_block: BasicBlock,
-    is_cleanup: bool
+    is_cleanup: bool,
+    rapture_crate_number: usize
 ) -> TerminatorKind<'tcx> {
     // Here we determine which function to target for the injection, using its crate number and definition index (which are statically fixed)
-    let crate_num = CrateNum::new(20);
+    let crate_num = CrateNum::new(rapture_crate_number);
     let def_index = DefIndex::from_usize(0);
     let mut _def_id = DefId { krate: crate_num, index: def_index };
     let mut _def_id_int = 0;
@@ -138,7 +139,7 @@ fn call_from_ref<'tcx> (
     
     while name != "MutDLTBoundedPointer::<T>::from_ref" {
         _def_id_int += 1;
-        _def_id = DefId { krate: CrateNum::new(20), index: DefIndex::from_usize(_def_id_int) };
+        _def_id = DefId { krate: CrateNum::new(rapture_crate_number), index: DefIndex::from_usize(_def_id_int) };
         name = tcx.def_path_str(_def_id);
     }
     if name != "MutDLTBoundedPointer::<T>::from_ref" {
@@ -188,8 +189,8 @@ fn call_size_of<'tcx> (
     is_cleanup: bool
 ) -> TerminatorKind<'tcx> {
     // Here we determine which function to target for the injection, using its crate number and definition index (which are statically fixed)
-    let size_calc_crate_num = CrateNum::new(2);
-    let size_calc_def_index = DefIndex::from_usize(1726);
+    let size_calc_crate_num = CrateNum::new(2);                     // fixed, unless standard library changes
+    let size_calc_def_index = DefIndex::from_usize(1726);           // fixed, unless standard library changes
     let size_calc_def_id = DefId { krate: size_calc_crate_num, index: size_calc_def_index };
     let size_calc_name = tcx.def_path_str(size_calc_def_id);
     if !size_calc_name.contains("mem::size_of") {
@@ -236,9 +237,10 @@ fn call_index_mut_bound<'tcx> (
     index: usize, 
     dest_local: Local, 
     deref_block: BasicBlock,
-    is_cleanup: bool
+    is_cleanup: bool,
+    rapture_crate_number: usize
 ) -> TerminatorKind<'tcx> {
-    let crate_index = CrateNum::new(20);
+    let crate_index = CrateNum::new(rapture_crate_number);
     let def_index = DefIndex::from_usize(0);
     let mut _def_id_int = 0;
     let mut _def_id = DefId { krate: crate_index, index: def_index };
@@ -246,7 +248,7 @@ fn call_index_mut_bound<'tcx> (
 
     while name != "index_mut_bound" {
         _def_id_int += 1;
-        _def_id = DefId { krate: CrateNum::new(20), index: DefIndex::from_usize(_def_id_int) };
+        _def_id = DefId { krate: CrateNum::new(rapture_crate_number), index: DefIndex::from_usize(_def_id_int) };
         name = tcx.def_path_str(_def_id);
     }
 
@@ -301,10 +303,11 @@ fn call_invalidate<'tcx> (
     generics_list: &[rustc_middle::ty::GenericArg<'tcx>; 1], 
     dest_local: Local, 
     invalidate_block: BasicBlock,
-    is_cleanup: bool
+    is_cleanup: bool,
+    rapture_crate_number: usize
 ) -> TerminatorKind<'tcx> {
     // Here we determine which function to target for the injection, using its crate number and definition index (which are statically fixed)
-    let crate_num = CrateNum::new(20);
+    let crate_num = CrateNum::new(rapture_crate_number);
     let def_index = DefIndex::from_usize(0);
     let mut _def_id = DefId { krate: crate_num, index: def_index };
     let mut _def_id_int = 0;
@@ -312,7 +315,7 @@ fn call_invalidate<'tcx> (
     
     while name != "MutDLTBoundedPointer::<T>::invalidate" {
         _def_id_int += 1;
-        _def_id = DefId { krate: CrateNum::new(20), index: DefIndex::from_usize(_def_id_int) };
+        _def_id = DefId { krate: CrateNum::new(rapture_crate_number), index: DefIndex::from_usize(_def_id_int) };
         name = tcx.def_path_str(_def_id);
     }
     if name != "MutDLTBoundedPointer::<T>::invalidate" {
@@ -369,7 +372,8 @@ fn inject_deref<'tcx> (
     root_temps: &FxHashMap<Local, Local>, 
     root_temp_refs: &FxHashMap<Local, Local>, 
     root_generics: &FxHashMap<Local, GenericArg<'tcx>>, 
-    dlt_generics: &FxHashMap<Local, GenericArg<'tcx>> 
+    dlt_generics: &FxHashMap<Local, GenericArg<'tcx>>,
+    rapture_crate_number: usize
 ) {
     // Shift all the statements beyond our target statement to a new vector and clear them from the original block
     let mut new_stmts = vec![];
@@ -414,7 +418,7 @@ fn inject_deref<'tcx> (
         
         *new_temps_counter += 1;
         local_sizes.insert(local, (size_temp + *new_temps_counter).into());
-        let deref_terminator = call_index_mut_bound(tcx, local, *root, root_temp_refs.clone(), local_sizes.clone(), &generics_list, 0, _empty_tuple_temp, deref_block, data.is_cleanup.clone());
+        let deref_terminator = call_index_mut_bound(tcx, local, *root, root_temp_refs.clone(), local_sizes.clone(), &generics_list, 0, _empty_tuple_temp, deref_block, data.is_cleanup.clone(), rapture_crate_number);
         let size_calc_block = patch.new_block(BasicBlockData {
             statements: vec![new_stmt],
             terminator: Some(data.terminator.as_ref().unwrap().clone()),
@@ -430,11 +434,11 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
         println!("\nStart of CAPSTONE-Injection pass for function: {}", tcx.def_path_str(body.source.def_id()));
         let mut patch = MirPatch::new(body);
 
-        let mut rapture_crate_number: u32 = 0;
+        let mut rapture_crate_number: usize = 0;
         let mut crate_num_flag: bool = true;
         while crate_num_flag {
             rapture_crate_number += 1;
-            crate_num_flag = Symbol::as_str(& tcx.crate_name(CrateNum::from_u32(rapture_crate_number))) != "rapture";
+            crate_num_flag = Symbol::as_str(& tcx.crate_name(CrateNum::from_usize(rapture_crate_number))) != "rapture";
         }
         
         // First, upward, loop to find the last assignments to pointers
@@ -574,11 +578,11 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
 
         // Obtaining the ADT type for MutDLTBoundedPointer
         let mut def_id_int = 0;
-        let mut def_id_adt = DefId { krate: CrateNum::new(20), index: DefIndex::from_usize(def_id_int) };
+        let mut def_id_adt = DefId { krate: CrateNum::new(rapture_crate_number), index: DefIndex::from_usize(def_id_int) };
         let mut name = tcx.def_path_str(def_id_adt);
         while name != "MutDLTBoundedPointer" {
             def_id_int += 1;
-            def_id_adt = DefId { krate: CrateNum::new(20), index: DefIndex::from_usize(def_id_int) };
+            def_id_adt = DefId { krate: CrateNum::new(rapture_crate_number), index: DefIndex::from_usize(def_id_int) };
             name = tcx.def_path_str(def_id_adt);
         }
         if name != "MutDLTBoundedPointer" {
@@ -699,7 +703,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                             let local = lhs.local.clone();
 
                             inject_deref(tcx, data, &stmt, local, _empty_tuple_temp, i, size_temp, &mut expected_terminator, &mut patch, &roots, 
-                                &mut new_temps_counter, &mut local_sizes, &root_temps, &root_temp_refs, &root_generics, &dlt_generics);
+                                &mut new_temps_counter, &mut local_sizes, &root_temps, &root_temp_refs, &root_generics, &dlt_generics, rapture_crate_number);
                         }
                         match rhs {
                             Rvalue::Cast( .., operand, _ty) => {
@@ -709,7 +713,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                             let local = place.local.clone();
                                             
                                             inject_deref(tcx, data, &stmt, local, _empty_tuple_temp, i, size_temp, &mut expected_terminator, &mut patch, &roots, 
-                                                &mut new_temps_counter, &mut local_sizes, &root_temps, &root_temp_refs, &root_generics, &dlt_generics);
+                                                &mut new_temps_counter, &mut local_sizes, &root_temps, &root_temp_refs, &root_generics, &dlt_generics, rapture_crate_number);
                                         },
                                         _ => (),
                                     }
@@ -723,7 +727,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                                 let local = place.local.clone();
                                                 
                                                 inject_deref(tcx, data, &stmt, local, _empty_tuple_temp, i, size_temp, &mut expected_terminator, &mut patch, &roots, 
-                                                    &mut new_temps_counter, &mut local_sizes, &root_temps, &root_temp_refs, &root_generics, &dlt_generics);
+                                                    &mut new_temps_counter, &mut local_sizes, &root_temps, &root_temp_refs, &root_generics, &dlt_generics, rapture_crate_number);
                                             },
                                             _ => (),
                                         }
@@ -738,7 +742,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                             let local = place.local.clone();
                                             
                                             inject_deref(tcx, data, &stmt, local, _empty_tuple_temp, i, size_temp, &mut expected_terminator, &mut patch, &roots, 
-                                                &mut new_temps_counter, &mut local_sizes, &root_temps, &root_temp_refs, &root_generics, &dlt_generics);
+                                                &mut new_temps_counter, &mut local_sizes, &root_temps, &root_temp_refs, &root_generics, &dlt_generics, rapture_crate_number);
                                         },
                                         _ => (),
                                     }
@@ -749,7 +753,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                             let local = place.local.clone();
                                             
                                             inject_deref(tcx, data, &stmt, local, _empty_tuple_temp, i, size_temp, &mut expected_terminator, &mut patch, &roots, 
-                                                &mut new_temps_counter, &mut local_sizes, &root_temps, &root_temp_refs, &root_generics, &dlt_generics);
+                                                &mut new_temps_counter, &mut local_sizes, &root_temps, &root_temp_refs, &root_generics, &dlt_generics, rapture_crate_number);
                                         },
                                         _ => (),
                                     }
@@ -761,7 +765,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                     let local = place.local.clone();
                                     
                                     inject_deref(tcx, data, &stmt, local, _empty_tuple_temp, i, size_temp, &mut expected_terminator, &mut patch, &roots, 
-                                        &mut new_temps_counter, &mut local_sizes, &root_temps, &root_temp_refs, &root_generics, &dlt_generics);
+                                        &mut new_temps_counter, &mut local_sizes, &root_temps, &root_temp_refs, &root_generics, &dlt_generics, rapture_crate_number);
                                 }
                             },
                             Rvalue::Repeat(operand, ..) | Rvalue::ShallowInitBox(operand, ..) | Rvalue::UnaryOp(.., operand) | Rvalue::Use(operand) => {
@@ -771,7 +775,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                             let local = place.local.clone();
                                             
                                             inject_deref(tcx, data, &stmt, local, _empty_tuple_temp, i, size_temp, &mut expected_terminator, &mut patch, &roots, 
-                                                &mut new_temps_counter, &mut local_sizes, &root_temps, &root_temp_refs, &root_generics, &dlt_generics);
+                                                &mut new_temps_counter, &mut local_sizes, &root_temps, &root_temp_refs, &root_generics, &dlt_generics, rapture_crate_number);
                                         },
                                         _ => (),
                                     }
@@ -850,7 +854,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                     let generics_list = [g_root];
                                     println!("****lhs {:?}, temp: {:?}", &local, &root_temps[&local]);
 
-                                    let from_ref_terminator = call_from_ref(tcx, *local, root_temps.clone(), root_refs.clone(), &generics_list, from_ref_block, data.is_cleanup.clone());
+                                    let from_ref_terminator = call_from_ref(tcx, *local, root_temps.clone(), root_refs.clone(), &generics_list, from_ref_block, data.is_cleanup.clone(), rapture_crate_number);
 
                                     patch.patch_terminator(bb, from_ref_terminator);
                                 }
@@ -906,7 +910,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                 let g_root = root_generics[&local];
                                 let generics_list = [g_root];
 
-                                let from_ref_terminator = call_from_ref(tcx, local, root_temps.clone(), root_refs.clone(), &generics_list, target.unwrap(), data.is_cleanup.clone());
+                                let from_ref_terminator = call_from_ref(tcx, local, root_temps.clone(), root_refs.clone(), &generics_list, target.unwrap(), data.is_cleanup.clone(), rapture_crate_number);
 
                                 println!("****lhs {:?}, temp: {:?}", &local, &root_temps[&local]);
                                 // The current basic block's terminator is now replaced with the one we just created (which shifts the control flow to the intermediary block)
@@ -1217,7 +1221,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
 
                     let g_root = root_generics[&root];
                     let generics_list = [g_root];
-                    let invalidate_terminator = call_invalidate(tcx, root, root_temp_refs.clone(), &generics_list, _empty_tuple_temp, invalidate_block, data.is_cleanup.clone());
+                    let invalidate_terminator = call_invalidate(tcx, root, root_temp_refs.clone(), &generics_list, _empty_tuple_temp, invalidate_block, data.is_cleanup.clone(), rapture_crate_number);
                     
                     let drop_place = Place {local: (root_temps[&root]).into(), projection: List::empty()};
                     
