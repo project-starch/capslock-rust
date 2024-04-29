@@ -16,8 +16,7 @@ use crate::Spanned;
 // use rustc_middle::mir::HasLocalDecls;
 // use rustc_middle::mir::{dump_mir, PassWhere};
 use rustc_middle::mir::{
-    /*traversal,*/ Body, LocalDecl, Local, InlineAsmOperand, /*LocalKind, Location,*/ BasicBlockData, Place, UnwindAction, CallSource, CastKind, Rvalue, 
-    Statement, StatementKind, TerminatorKind, /*UnwindTerminateReason,*/ Operand, Const, ConstValue, ConstOperand, BorrowKind, MutBorrowKind, BasicBlock, START_BLOCK
+    /*traversal,*/ BasicBlock, BasicBlockData, Body, BorrowKind, CallSource, CastKind, Const, ConstOperand, ConstValue, InlineAsmOperand, Local, LocalDecl, MutBorrowKind, Operand, Place, Rvalue, Statement, StatementKind, TerminatorKind, UnwindAction, UnwindTerminateReason, START_BLOCK
 };
 use rustc_middle::mir::interpret::Scalar;
 // use crate::ty::ty_kind;
@@ -127,7 +126,8 @@ fn call_from_ref<'tcx> (
     root_temps: FxHashMap<Local, Local>, 
     root_refs: FxHashMap<Local, Local>, 
     generics_list: &[rustc_middle::ty::GenericArg<'tcx>; 1], 
-    from_ref_block: BasicBlock
+    from_ref_block: BasicBlock,
+    is_cleanup: bool
 ) -> TerminatorKind<'tcx> {
     // Here we determine which function to target for the injection, using its crate number and definition index (which are statically fixed)
     let crate_num = CrateNum::new(20);
@@ -158,13 +158,20 @@ fn call_from_ref<'tcx> (
     let operand_input = Operand::Copy(Place {local: (root_refs[&root]).into(), projection: List::empty()});
     let spanned_operand = Spanned { span: SPANS[0], node: operand_input };
 
+    let unwind_action: UnwindAction;
+    if is_cleanup {
+        unwind_action = UnwindAction::Terminate(UnwindTerminateReason::InCleanup);
+    }
+    else {
+        unwind_action = UnwindAction::Continue;
+    }
     // Create a block terminator that will execute the function call we want to inject
     let intermediary_terminator = TerminatorKind::Call {
         func: operand_,
         args: vec![spanned_operand],
         destination: dest_place,
         target: Some(from_ref_block),
-        unwind: UnwindAction::Continue,
+        unwind: unwind_action,
         call_source: CallSource::Normal,
         fn_span: SPANS[0],
     };
@@ -177,7 +184,8 @@ fn call_size_of<'tcx> (
     local: Local, 
     local_sizes: FxHashMap<Local, Local>,
     generics_list: &[rustc_middle::ty::GenericArg<'tcx>; 2],
-    size_of_block: BasicBlock
+    size_of_block: BasicBlock,
+    is_cleanup: bool
 ) -> TerminatorKind<'tcx> {
     // Here we determine which function to target for the injection, using its crate number and definition index (which are statically fixed)
     let size_calc_crate_num = CrateNum::new(2);
@@ -197,12 +205,20 @@ fn call_size_of<'tcx> (
 
     let size_calc_dest_place = Place {local: (local_sizes[&local]).into(), projection: List::empty()};
 
+    let unwind_action: UnwindAction;
+    if is_cleanup {
+        unwind_action = UnwindAction::Terminate(UnwindTerminateReason::InCleanup);
+    }
+    else {
+        unwind_action = UnwindAction::Continue;
+    }
+
     let size_calc_terminator = TerminatorKind::Call {
         func: size_calc_operand_,
         args: vec![],
         destination: size_calc_dest_place,
         target: Some(size_of_block),
-        unwind: UnwindAction::Continue,
+        unwind: unwind_action,
         call_source: CallSource::Normal,
         fn_span: SPANS[0],
     };
@@ -219,7 +235,8 @@ fn call_index_mut_bound<'tcx> (
     generics_list: &[rustc_middle::ty::GenericArg<'tcx>; 2], 
     index: usize, 
     dest_local: Local, 
-    deref_block: BasicBlock
+    deref_block: BasicBlock,
+    is_cleanup: bool
 ) -> TerminatorKind<'tcx> {
     let crate_index = CrateNum::new(20);
     let def_index = DefIndex::from_usize(0);
@@ -256,13 +273,20 @@ fn call_index_mut_bound<'tcx> (
     let operand_input3 = Operand::Move(Place {local: (local_sizes[&local]).into(), projection: List::empty()});
     let spanned_operand3 = Spanned { span: SPANS[0], node: operand_input3 };
 
+    let unwind_action: UnwindAction;
+    if is_cleanup {
+        unwind_action = UnwindAction::Terminate(UnwindTerminateReason::InCleanup);
+    }
+    else {
+        unwind_action = UnwindAction::Continue;
+    }
     // Create a block terminator that will execute the function call we want to inject
     let deref_terminator = TerminatorKind::Call {
         func: operand_,
         args: vec![spanned_operand1, spanned_operand2, spanned_operand3],
         destination: dest_place,
         target: Some(deref_block),
-        unwind: UnwindAction::Continue,
+        unwind: unwind_action,
         call_source: CallSource::Normal,
         fn_span: SPANS[0],
     };
@@ -276,7 +300,8 @@ fn call_invalidate<'tcx> (
     root_temp_refs: FxHashMap<Local, Local>,
     generics_list: &[rustc_middle::ty::GenericArg<'tcx>; 1], 
     dest_local: Local, 
-    invalidate_block: BasicBlock
+    invalidate_block: BasicBlock,
+    is_cleanup: bool
 ) -> TerminatorKind<'tcx> {
     // Here we determine which function to target for the injection, using its crate number and definition index (which are statically fixed)
     let crate_num = CrateNum::new(20);
@@ -307,13 +332,20 @@ fn call_invalidate<'tcx> (
     let operand_input = Operand::Move(Place {local: (root_temp_refs[&root]).into(), projection: List::empty()});
     let spanned_operand = Spanned { span: SPANS[0], node: operand_input };
 
+    let unwind_action: UnwindAction;
+    if is_cleanup {
+        unwind_action = UnwindAction::Terminate(UnwindTerminateReason::InCleanup);
+    }
+    else {
+        unwind_action = UnwindAction::Continue;
+    }
     // Create a block terminator that will execute the function call we want to inject
     let intermediary_terminator = TerminatorKind::Call {
         func: operand_,
         args: vec![spanned_operand],
         destination: dest_place,
         target: Some(invalidate_block),
-        unwind: UnwindAction::Continue,
+        unwind: unwind_action,
         call_source: CallSource::Normal,
         fn_span: SPANS[0],
     };
@@ -366,14 +398,14 @@ fn inject_deref<'tcx> (
             deref_block = patch.new_block(BasicBlockData {
                 statements: new_stmts.clone(),
                 terminator: Some(data.terminator.as_ref().unwrap().clone()),
-                is_cleanup: false,
+                is_cleanup: data.is_cleanup.clone(),
             });
         }
         else {
             deref_block = patch.new_block(BasicBlockData {
                 statements: vec![],
                 terminator: Some(data.terminator.as_ref().unwrap().clone()),
-                is_cleanup: false,
+                is_cleanup: data.is_cleanup.clone(),
             });
         }
         patch.patch_terminator(deref_block, expected_terminator.clone());
@@ -382,14 +414,14 @@ fn inject_deref<'tcx> (
         
         *new_temps_counter += 1;
         local_sizes.insert(local, (size_temp + *new_temps_counter).into());
-        let deref_terminator = call_index_mut_bound(tcx, local, *root, root_temp_refs.clone(), local_sizes.clone(), &generics_list, 0, _empty_tuple_temp, deref_block);
+        let deref_terminator = call_index_mut_bound(tcx, local, *root, root_temp_refs.clone(), local_sizes.clone(), &generics_list, 0, _empty_tuple_temp, deref_block, data.is_cleanup.clone());
         let size_calc_block = patch.new_block(BasicBlockData {
             statements: vec![new_stmt],
             terminator: Some(data.terminator.as_ref().unwrap().clone()),
-            is_cleanup: false,
+            is_cleanup: data.is_cleanup.clone(),
         });
         patch.patch_terminator(size_calc_block, deref_terminator);
-        *expected_terminator = call_size_of(tcx, local, local_sizes.clone(), &generics_list_for_size, size_calc_block);
+        *expected_terminator = call_size_of(tcx, local, local_sizes.clone(), &generics_list_for_size, size_calc_block, data.is_cleanup.clone());
     }
 }
 
@@ -800,24 +832,25 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                     match data.terminator.as_ref() {
                                         Some(_x) => {
                                             from_ref_block = patch.new_block(BasicBlockData {
-                                                statements: vec![],
+                                                statements: new_stmts.clone(),
                                                 terminator: Some(data.terminator.as_ref().unwrap().clone()),
-                                                is_cleanup: false,
+                                                is_cleanup: data.is_cleanup.clone(),
                                             });
                                         },
                                         _ => {
                                             from_ref_block = patch.new_block(BasicBlockData {
-                                                statements: vec![],
+                                                statements: new_stmts.clone(),
                                                 terminator: None,
-                                                is_cleanup: false,
+                                                is_cleanup: data.is_cleanup.clone(),
                                             });
                                         }
                                     }
 
                                     let g_root = root_generics[&local];
                                     let generics_list = [g_root];
+                                    println!("****lhs {:?}, temp: {:?}", &local, &root_temps[&local]);
 
-                                    let from_ref_terminator = call_from_ref(tcx, *local, root_temps.clone(), root_refs.clone(), &generics_list, from_ref_block);
+                                    let from_ref_terminator = call_from_ref(tcx, *local, root_temps.clone(), root_refs.clone(), &generics_list, from_ref_block, data.is_cleanup.clone());
 
                                     patch.patch_terminator(bb, from_ref_terminator);
                                 }
@@ -830,7 +863,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
             match &data.terminator {
                 Some(x) => {
                     match &x.kind {
-                        TerminatorKind::Call { func: _, args: _, destination, .. } => {
+                        TerminatorKind::Call { func, args, destination, target, unwind, call_source, fn_span} => {
                             if alloc_roots.contains(&(destination.local)) {
                                 let local = destination.local;
 
@@ -839,8 +872,6 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                     kind: StatementKind::Assign(Box::new((root_refs[&local].into(), Rvalue::Ref(tcx.lifetimes.re_erased, BorrowKind::Mut { kind: MutBorrowKind::Default }, Place { local: local, projection: List::empty() })))),
                                 };
 
-                                data.statements.push(new_stmt);
-
                                 // Create an intermediary block that will be inserted between the current block and the next block
                                 let from_ref_block;
 
@@ -848,43 +879,39 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                 match &data.terminator {
                                     Some(_x) => {
                                         from_ref_block = patch.new_block(BasicBlockData {
-                                            statements: vec![],
+                                            statements: vec![new_stmt],
                                             terminator: Some(data.terminator.as_ref().unwrap().clone()),
-                                            is_cleanup: false,
+                                            is_cleanup: data.is_cleanup.clone(),
                                         });
                                     },
                                     _ => {
                                         from_ref_block = patch.new_block(BasicBlockData {
-                                            statements: vec![],
+                                            statements: vec![new_stmt],
                                             terminator: None,
-                                            is_cleanup: false,
+                                            is_cleanup: data.is_cleanup.clone(),
                                         });
                                     }
                                 }
 
+                                let new_terminator = TerminatorKind::Call {
+                                    func: func.clone(),
+                                    args: args.clone(),
+                                    destination: destination.clone(),
+                                    target: Some(from_ref_block),
+                                    unwind: unwind.clone(),
+                                    call_source: call_source.clone(),
+                                    fn_span: fn_span.clone(),
+                                };
+
                                 let g_root = root_generics[&local];
                                 let generics_list = [g_root];
 
-                                let from_ref_terminator = call_from_ref(tcx, local, root_temps.clone(), root_refs.clone(), &generics_list, from_ref_block);
+                                let from_ref_terminator = call_from_ref(tcx, local, root_temps.clone(), root_refs.clone(), &generics_list, target.unwrap(), data.is_cleanup.clone());
 
-                                // Insert a new function call to std::mem::size_of for the root type
-                                let size_calc_block = patch.new_block(BasicBlockData {
-                                    statements: vec![],
-                                    terminator: Some(data.terminator.as_ref().unwrap().clone()),
-                                    is_cleanup: false,
-                                });
-
-                                // The function may have generic types as its parameters. These need to be statically mentioned if we are injecting a call to it
-                                
-                                let ty_bool = ty::Const::from_bool(tcx, true);
-                                let g_bool = GenericArg::from(ty_bool);
-                                let generics_list_for_size = [g_root, g_bool];
-
-                                let size_calc_terminator = call_size_of(tcx, local, local_sizes.clone(), &generics_list_for_size, size_calc_block);
-
+                                println!("****lhs {:?}, temp: {:?}", &local, &root_temps[&local]);
                                 // The current basic block's terminator is now replaced with the one we just created (which shifts the control flow to the intermediary block)
-                                patch.patch_terminator(bb, from_ref_terminator);
-                                patch.patch_terminator(from_ref_block, size_calc_terminator);
+                                patch.patch_terminator(bb, new_terminator);
+                                patch.patch_terminator(from_ref_block, from_ref_terminator);
                             }
                         },
                         _ => (),
@@ -893,7 +920,6 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                 _ => (),
             }
         }
-
 
         patch.apply(body);
         patch = MirPatch::new(body);
@@ -912,13 +938,11 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
 
         let mut previous_bb = START_BLOCK;
 
-        println!("Initiating DFS transit...");
         while !stack.is_empty() {
             let bb = stack.pop_front().unwrap();
             let data = &body.basic_blocks[bb];
 
             visited_blocks.insert(bb);
-            println!("Basic block in DFS traversal: {:?}", &bb);
 
             if bb != START_BLOCK {
                 match &body.basic_blocks[previous_bb].terminator {
@@ -977,7 +1001,6 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
 
         let mut scope_children: FxHashMap<usize, Vec<usize>> = FxHashMap::default();
 
-        // Print all the scopes in the MIR
         for i in 0..body.source_scopes.len() {
             last_block_in_scope.push(START_BLOCK);
             scope_children.insert(i, vec![]);
@@ -1000,7 +1023,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                         successor_count += 1;
 
                         if x.source_info.scope.index() > (body.basic_blocks[target].terminator).clone().unwrap().source_info.scope.index() {
-                            // for all scopes in the parent chain from current scope to the target scope, update the last block in scope
+                            // for all scopes in the parent chain from current scope to the target scope, we update the last block in scope
                             let mut current_scope = x.source_info.scope;
                             while current_scope.index() > (body.basic_blocks[target].terminator).clone().unwrap().source_info.scope.index() {
                                 last_block_in_scope[current_scope.index()] = bb.into();
@@ -1014,7 +1037,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                         }
                         
                         if x.source_info.scope.index() < (body.basic_blocks[target].terminator).clone().unwrap().source_info.scope.index() {
-                            // check if the target scope is not in the subtree of the children scopes of the current scope, update the last block in scope
+                            // we check if the target scope is not in the subtree of the children scopes of the current scope, we update the last block in scope
                             let mut potentially_child_scope = (body.basic_blocks[target].terminator).clone().unwrap().source_info.scope;
                             while potentially_child_scope.index() > x.source_info.scope.index() {
                                 if body.source_scopes[potentially_child_scope].parent_scope.unwrap().index() == x.source_info.scope.index() {
@@ -1100,17 +1123,6 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
             }
         }
 
-        println!("Last block in each scope: {:?}", last_block_in_scope);
-        println!("Return points: {:?}", return_points);
-
-        // Active refs at each of the above
-        for (i, last_block) in last_block_in_scope.iter().enumerate() {
-            println!("Active refs at last block in scope {}: {:?}", i, active_root_refs_per_bb[last_block]);
-        }
-        for (j, return_point) in return_points.iter().enumerate() {
-            println!("Active refs at return point {}: {:?}", j, active_root_refs_per_bb[return_point]);
-        }
-
         // We now create new restricted sets that track "last active"ness
         // For this we do a DFS on the scopes tree
 
@@ -1148,9 +1160,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                 }
             }
         }
-
-        println!("Last active root refs per scope: {:?}", last_active_root_refs_per_scope);
-
+        
         // Form a set of the blocks that require a drop
         let mut drop_blocks: FxHashSet<BasicBlock> = FxHashSet::default();
         for return_point in return_points.iter() {
@@ -1168,12 +1178,22 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                     if return_points.contains(&bb) {
                         active_root_refs_per_bb[&bb].clone()
                     } else {
-                        last_active_root_refs_per_scope[&data.terminator.as_ref().unwrap().source_info.scope.index()].clone()
+                        let scope: usize = {
+                            let mut scope = 0;
+                            for (key, value) in last_block_in_scope.iter().enumerate() {
+                                if *value == bb {
+                                    scope = key as usize;
+                                    break;
+                                }
+                            }
+                            scope
+                        };
+                        last_active_root_refs_per_scope[&(scope)].clone()
                     }
                 };
                 let mut expected_terminator = data.terminator.as_ref().unwrap().kind.clone();
                 for root_temp in roots_to_drop.iter() {
-                    println!("******** Performing drop for root with reftemp: {:?}", root_temp);
+                    println!("******* Performing drop for root with reftemp: {:?}", root_temp);
                     // The following code injects drop and invalidate for some root allocation local. Right now they are unreachable in the CFG and only go to themselvers.
                     // The target location block is to be decided given the search for termination blocks.
                     let mut root = root_temp.clone();
@@ -1192,25 +1212,33 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                     let invalidate_block = patch.new_block(BasicBlockData {
                         statements: vec![],
                         terminator: Some(data.terminator.as_ref().unwrap().clone()),
-                        is_cleanup: false,
+                        is_cleanup: data.is_cleanup.clone(),
                     });
 
                     let g_root = root_generics[&root];
                     let generics_list = [g_root];
-                    let invalidate_terminator = call_invalidate(tcx, root, root_temp_refs.clone(), &generics_list, _empty_tuple_temp, invalidate_block);
+                    let invalidate_terminator = call_invalidate(tcx, root, root_temp_refs.clone(), &generics_list, _empty_tuple_temp, invalidate_block, data.is_cleanup.clone());
                     
                     let drop_place = Place {local: (root_temps[&root]).into(), projection: List::empty()};
                     
                     let drop_block = patch.new_block(BasicBlockData {
                         statements: vec![],
                         terminator: Some(data.terminator.as_ref().unwrap().clone()),
-                        is_cleanup: false,
+                        is_cleanup: data.is_cleanup.clone(),
                     });
+
+                    let unwind_action: UnwindAction;
+                    if data.is_cleanup {
+                        unwind_action = UnwindAction::Terminate(UnwindTerminateReason::InCleanup);
+                    }
+                    else {
+                        unwind_action = UnwindAction::Continue;
+                    }
 
                     let drop_terminator = TerminatorKind::Drop {
                         place: drop_place,
                         target: drop_block, // TODO: placeholder
-                        unwind: UnwindAction::Continue,
+                        unwind: unwind_action,
                         replace: false,
                     };
 
