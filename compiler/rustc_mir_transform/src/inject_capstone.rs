@@ -429,6 +429,47 @@ fn inject_deref<'tcx> (
     }
 }
 
+fn variable_projection_index<V, T>(projection: ProjectionElem<V, T>) -> V {
+    match projection {
+        ProjectionElem::Index(local) => {
+            local
+        },
+        _ => {println!("Constant index found in projection"); panic!()},
+    }
+}
+
+fn constant_projection_index<V, T>(projection: ProjectionElem<V, T>) -> usize {
+    match projection {
+        ProjectionElem::Field(fieldindex, _ty) => usize::from(fieldindex),
+        ProjectionElem::ConstantIndex {offset, min_length, from_end} => {
+            if from_end {
+                (min_length as usize - offset as usize).try_into().unwrap()
+            }
+            else {
+                offset as usize
+            }
+        },
+        ProjectionElem::Subslice {from, to, from_end} => {
+            if from_end {
+                (to - from).try_into().unwrap()
+            }
+            else {
+                from.try_into().unwrap()
+            }
+        },
+        ProjectionElem::Downcast(_symbol, variant_index) => usize::from(variant_index),
+        ProjectionElem::Index(_) => {println!("Variable index found in projection"); 0},
+        _ => 0,
+    }
+}
+
+fn whether_projection_index_variable<V, T>(projection: ProjectionElem<V, T>) -> bool {
+    match projection {
+        ProjectionElem::Index(_) => true,
+        _ => false,
+    }
+}
+
 impl<'tcx> MirPass<'tcx> for InjectCapstone {
     fn run_pass(&self, tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
         println!("\nStart of CAPSTONE-Injection pass for function: {}", tcx.def_path_str(body.source.def_id()));
@@ -617,9 +658,6 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
             let reftemp = body.local_decls.push(LocalDecl::new(ref_ty, SPANS[0]));
             root_refs.insert(*root, reftemp);
         }
-
-        // Create a set of locals that hold the Local for each root allocation from alloc_roots
-        let _root_allocations: FxHashMap<Local, Local> = alloc_roots.iter().map(|x| (*x, *x)).collect();
 
         // Create temporaries that will hold the size of the root type
         let mut local_sizes: FxHashMap<Local, Local> = FxHashMap::default();
