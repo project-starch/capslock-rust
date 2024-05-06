@@ -12,15 +12,15 @@ use rustc_ast::Mutability;
 // use rustc_middle::mir::visit::MutVisitor;
 use rustc_middle::mir::patch::MirPatch;
 use crate::ty::Ty;
-use crate::Spanned;
+use crate::{IndexVec, Spanned};
 // use rustc_middle::mir::HasLocalDecls;
 // use rustc_middle::mir::{dump_mir, PassWhere};
 use rustc_middle::mir::{
-    /*traversal,*/ BasicBlock, BasicBlockData, Body, BorrowKind, CallSource, CastKind, Const, ConstOperand, ConstValue, InlineAsmOperand, Local, LocalDecl, MutBorrowKind, Operand, Place, Rvalue, Statement, StatementKind, TerminatorKind, UnwindAction, UnwindTerminateReason, START_BLOCK
+    /*traversal,*/ BasicBlock, BasicBlockData, Body, BorrowKind, CallSource, CastKind, Const, ConstOperand, ConstValue, InlineAsmOperand, Local, LocalDecl, MutBorrowKind, Operand, Place, Rvalue, Statement, StatementKind, TerminatorKind, UnwindAction, UnwindTerminateReason, START_BLOCK, ProjectionElem
 };
 use rustc_middle::mir::interpret::Scalar;
 // use crate::ty::ty_kind;
-use rustc_middle::ty::{self, ScalarInt, TyCtxt};
+use rustc_middle::ty::{self, ScalarInt, TyCtxt, IntTy, UintTy, FloatTy, TypeAndMut};
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 // use crate::ty::BorrowKind;
 // use rustc_mir_dataflow::impls::MaybeLiveLocals;
@@ -50,7 +50,7 @@ fn handle_operands(alloc_roots: &mut Vec<Local>, tracked_locals: &mut Vec<Local>
 }
 
 fn record_operand_dereferences(alloc_roots: &Vec<Local>, root_references: &mut FxHashMap<Local, 
-    FxHashMap<Local, (i32, Vec<(bool, usize)>)>>, operand: &Operand<'_>, lhs: &Place<'_>) {
+    FxHashMap<Local, (i32, Vec<(bool, usize)>, Vec<LocalOrUsizeEnum>)>>, operand: &Operand<'_>, lhs: &Place<'_>) {
     match operand {
         &Operand::Copy(place) | &Operand::Move(place) => {
             record_place_derefences(alloc_roots, root_references, &place, lhs, false);
@@ -60,7 +60,7 @@ fn record_operand_dereferences(alloc_roots: &Vec<Local>, root_references: &mut F
 }
 
 fn record_place_derefences(alloc_roots: &Vec<Local>, root_references: &mut FxHashMap<Local, 
-    FxHashMap<Local, (i32, Vec<(bool, usize)>)>>, place: &Place<'_>, lhs: &Place<'_>, create_ref: bool) {
+    FxHashMap<Local, (i32, Vec<(bool, usize)>, Vec<LocalOrUsizeEnum>)>>, place: &Place<'_>, lhs: &Place<'_>, create_ref: bool) {
     let ref_offset = if create_ref {1} else {0};
     if alloc_roots.contains(&place.local) {
         if !root_references.contains_key(&place.local) {
@@ -68,7 +68,17 @@ fn record_place_derefences(alloc_roots: &Vec<Local>, root_references: &mut FxHas
         }
         let deref_depth: i32 = place.projection.len() as i32 - lhs.projection.len() as i32 - ref_offset;
         if !root_references[&place.local].contains_key(&lhs.local) {
-            root_references.get_mut(&place.local).unwrap().insert(lhs.local.clone(), (deref_depth, vec![(create_ref, place as *const Place<'_> as usize)]));
+            let mut past_cast_indices: Vec<LocalOrUsizeEnum> = vec![];
+            for proj in place.projection.iter() {
+                if whether_projection_index_variable(proj) {
+                    past_cast_indices.push(LocalOrUsizeEnum::Local(variable_projection_index(proj)));
+                }
+                else {
+                    past_cast_indices.push(LocalOrUsizeEnum::Usize(constant_projection_index(proj)));
+                }
+                println!("For local: {:?}, After proj: {:?}, past_cast_indices: {:?}", lhs.local.clone(), proj, past_cast_indices);
+            }
+            root_references.get_mut(&place.local).unwrap().insert(lhs.local.clone(), (deref_depth, vec![(create_ref, place as *const Place<'_> as usize)], past_cast_indices));
         }
         else {
             let old_value = root_references[&place.local][&lhs.local].0;
@@ -81,7 +91,17 @@ fn record_place_derefences(alloc_roots: &Vec<Local>, root_references: &mut FxHas
             if root_references.contains_key(root) && root_references[root].contains_key(&place.local) {
                 let deref_depth: i32 = place.projection.len() as i32 - lhs.projection.len() as i32 + root_references[root][&place.local].0 - ref_offset;
                 if !root_references[root].contains_key(&lhs.local) {
-                    root_references.get_mut(root).unwrap().insert(lhs.local.clone(), (deref_depth, vec![(create_ref, place as *const Place<'_> as usize)]));
+                    let mut past_cast_indices: Vec<LocalOrUsizeEnum> = root_references[root][&place.local].2.clone();
+                    for proj in place.projection.iter() {
+                        if whether_projection_index_variable(proj) {
+                            past_cast_indices.push(LocalOrUsizeEnum::Local(variable_projection_index(proj)));
+                        }
+                        else {
+                            past_cast_indices.push(LocalOrUsizeEnum::Usize(constant_projection_index(proj)));
+                        }
+                        println!("For local: {:?}, After proj: {:?}, past_cast_indices: {:?}", lhs.local.clone(), proj, past_cast_indices);
+                    }
+                    root_references.get_mut(root).unwrap().insert(lhs.local.clone(), (deref_depth, vec![(create_ref, place as *const Place<'_> as usize)], past_cast_indices));
                 }
                 else {
                     let old_value = root_references[root][&lhs.local].0;
@@ -94,7 +114,7 @@ fn record_place_derefences(alloc_roots: &Vec<Local>, root_references: &mut FxHas
 }
 
 fn check_operand_depth(alloc_roots: &Vec<Local>, root_references: &mut FxHashMap<Local, 
-    FxHashMap<Local, (i32, Vec<(bool, usize)>)>>, operand: &Operand<'_>) -> Vec<Local> {
+    FxHashMap<Local, (i32, Vec<(bool, usize)>, Vec<LocalOrUsizeEnum>)>>, operand: &Operand<'_>) -> Vec<Local> {
     match operand {
         &Operand::Copy(place) | &Operand::Move(place) => {
             check_place_depth(alloc_roots, root_references, &place)
@@ -104,7 +124,7 @@ fn check_operand_depth(alloc_roots: &Vec<Local>, root_references: &mut FxHashMap
 }
 
 fn check_place_depth(alloc_roots: &Vec<Local>, root_references: &mut FxHashMap<Local, 
-    FxHashMap<Local, (i32, Vec<(bool, usize)>)>>, place: &Place<'_>) -> Vec<Local> {
+    FxHashMap<Local, (i32, Vec<(bool, usize)>, Vec<LocalOrUsizeEnum>)>>, place: &Place<'_>) -> Vec<Local> {
     let mut roots_found: Vec<Local> = vec![];
     if alloc_roots.contains(&place.local) {
         roots_found.push((&place.local).clone());
@@ -229,12 +249,11 @@ fn call_size_of<'tcx> (
 
 fn call_index_mut_bound<'tcx> (
     tcx: TyCtxt<'tcx>, 
-    local: Local, 
     root: Local,
     root_temp_refs: FxHashMap<Local, Local>, 
-    local_sizes: FxHashMap<Local, Local>, 
+    step_size: Local, 
     generics_list: &[rustc_middle::ty::GenericArg<'tcx>; 2], 
-    index: usize, 
+    index: Local, 
     dest_local: Local, 
     deref_block: BasicBlock,
     is_cleanup: bool,
@@ -269,10 +288,10 @@ fn call_index_mut_bound<'tcx> (
     let operand_input1 = Operand::Move(Place {local: (root_temp_refs[&root]).into(), projection: List::empty()});
     let spanned_operand1 = Spanned { span: SPANS[0], node: operand_input1 };
 
-    let operand_input2 = Operand::Constant(Box::new(ConstOperand { span: SPANS[0], user_ty: None, const_: Const::from_scalar(tcx, Scalar::Int(ScalarInt::from(index as u64)), Ty::new(tcx, ty::Uint(ty::UintTy::Usize))) }));
+    let operand_input2 = Operand::Move(Place {local: (index).into(), projection: List::empty()});
     let spanned_operand2 = Spanned { span: SPANS[0], node: operand_input2 };
 
-    let operand_input3 = Operand::Move(Place {local: (local_sizes[&local]).into(), projection: List::empty()});
+    let operand_input3 = Operand::Move(Place {local: (step_size).into(), projection: List::empty()});
     let spanned_operand3 = Spanned { span: SPANS[0], node: operand_input3 };
 
     let unwind_action: UnwindAction;
@@ -356,6 +375,76 @@ fn call_invalidate<'tcx> (
     intermediary_terminator
 }
 
+fn get_ty_size(kind: Ty<'_>, index: usize) -> usize {
+    let mut return_size = 0;
+    match kind.kind() {
+        ty::Bool => return_size = std::mem::size_of::<bool>(),
+        ty::Char => return_size = std::mem::size_of::<char>(),
+        ty::Int(i) => match *i {
+            IntTy::Isize => return_size = std::mem::size_of::<isize>(),
+            IntTy::I8 => return_size = std::mem::size_of::<i8>(),
+            IntTy::I16 => return_size = std::mem::size_of::<i16>(),
+            IntTy::I32 => return_size = std::mem::size_of::<i32>(),
+            IntTy::I64 => return_size = std::mem::size_of::<i64>(),
+            IntTy::I128 => return_size = std::mem::size_of::<i128>(),
+        }
+        ty::Uint(u) => match *u {
+            UintTy::Usize => return_size = std::mem::size_of::<usize>(),
+            UintTy::U8 => return_size = std::mem::size_of::<u8>(),
+            UintTy::U16 => return_size = std::mem::size_of::<u16>(),
+            UintTy::U32 => return_size = std::mem::size_of::<u32>(),
+            UintTy::U64 => return_size = std::mem::size_of::<u64>(),
+            UintTy::U128 => return_size = std::mem::size_of::<u128>(),
+        }
+        ty::Float(float) => match *float {
+            FloatTy::F16 => return_size = std::mem::size_of::<i16>(), // f16 currently does not exist
+            FloatTy::F32 => return_size = std::mem::size_of::<f32>(),
+            FloatTy::F64 => return_size = std::mem::size_of::<f64>(),
+            FloatTy::F128 => return_size = std::mem::size_of::<i128>(), // f128 currently does not exist
+        }
+        // ty::Adt(d, s) => {
+        //     write!(f, "{d:?}")?;
+        //     let mut s = s.into_iter();
+        //     let first = s.next();
+        //     match first {
+        //         Some(first) => write!(f, "<{:?}", first)?,
+        //         None => return Ok(()),
+        //     };
+
+        //     for arg in s {
+        //         write!(f, ", {:?}", arg)?;
+        //     }
+
+        //     write!(f, ">")
+        // }
+        ty::Foreign(_) => return_size = std::mem::size_of::<usize>(), // foreign types as a pointer?
+        ty::Str => return_size = std::mem::size_of::<i8>(), // size of a single byte-sized slice
+        ty::Array(t, _) => return_size = get_ty_size(t.clone()), // size of a single item slice
+        ty::Slice(t) => return_size = get_ty_size(t.clone()),
+        ty::RawPtr(TypeAndMut { ty, .. }) => return_size = get_ty_size(ty.clone()), // Do we want this to be usize (actual size of a raw pointer instead of pointed-to memory?)
+        ty::Ref(_, t, _) => return_size = get_ty_size(t.clone()),
+        // TyKind::Dynamic(p, r, repr) => match repr {
+        //     DynKind::Dyn => write!(f, "dyn {:?} + {:?}", &this.wrap(p), &this.wrap(r)),
+        //     DynKind::DynStar => {
+        //         write!(f, "dyn* {:?} + {:?}", &this.wrap(p), &this.wrap(r))
+        //     }
+        // },
+        // TyKind::Closure(d, s) => f.debug_tuple("Closure").field(d).field(&this.wrap(s)).finish(),
+        ty::Tuple(t) => {
+            for ty in *t {
+                return_size += get_ty_size(ty.clone());
+            }
+        },
+        // TyKind::Alias(i, a) => f.debug_tuple("Alias").field(i).field(&this.wrap(a)).finish(),
+        // TyKind::Param(p) => write!(f, "{p:?}"),
+        // TyKind::Bound(d, b) => crate::debug_bound_var(f, *d, b),
+        // TyKind::Placeholder(p) => write!(f, "{p:?}"),
+        // TyKind::Infer(t) => write!(f, "{:?}", this.wrap(t)),
+        _ => (),
+    }
+    return_size
+}
+
 fn inject_deref<'tcx> (
     tcx: TyCtxt<'tcx>, 
     data: &mut BasicBlockData<'tcx>,
@@ -373,7 +462,11 @@ fn inject_deref<'tcx> (
     root_temp_refs: &FxHashMap<Local, Local>, 
     root_generics: &FxHashMap<Local, GenericArg<'tcx>>, 
     dlt_generics: &FxHashMap<Local, GenericArg<'tcx>>,
-    rapture_crate_number: usize
+    rapture_crate_number: usize,
+    usize_temp: Local,
+    root_references: FxHashMap<Local, FxHashMap<Local, (i32, Vec<(bool, usize)>, Vec<LocalOrUsizeEnum>)>>,
+    local_decls: &IndexVec<Local, LocalDecl<'tcx>>,
+    usize_temp_2: Local,
 ) {
     // Shift all the statements beyond our target statement to a new vector and clear them from the original block
     let mut new_stmts = vec![];
@@ -390,6 +483,7 @@ fn inject_deref<'tcx> (
             source_info: stmt.source_info,
             kind: StatementKind::Assign(Box::new((root_temp_refs[&root].into(), Rvalue::Ref(tcx.lifetimes.re_erased, BorrowKind::Mut { kind: MutBorrowKind::Default }, Place { local: root_temps[&root], projection: List::empty() })))),
         };
+        data.statements.push(new_stmt.clone());
 
         // The function may have generic types as its parameters. These need to be statically mentioned if we are injecting a call to it
         let g_root = root_generics[&root];
@@ -418,7 +512,42 @@ fn inject_deref<'tcx> (
         
         *new_temps_counter += 1;
         local_sizes.insert(local, (size_temp + *new_temps_counter).into());
-        let deref_terminator = call_index_mut_bound(tcx, local, *root, root_temp_refs.clone(), local_sizes.clone(), &generics_list, 0, _empty_tuple_temp, deref_block, data.is_cleanup.clone(), rapture_crate_number);
+
+        let past_cast_indices: Vec<LocalOrUsizeEnum>;
+        if *root != local {
+            past_cast_indices = root_references[root].get(&local).unwrap().2.clone();
+        }
+        else {
+            past_cast_indices = vec![];
+        }
+        compute_propagated_offset(tcx, &past_cast_indices, usize_temp, data, i);
+
+        let local_type = local_decls[local].ty;
+
+        let rooot = root_references[root].get(&local).unwrap().2.clone();
+        let total_offset = 0;
+
+        for index_enum in rooot.iter() {
+            match index_enum {
+                LocalOrUsizeEnum::Local(local) => {
+                    let index_type = local_decls[local.clone()].ty;
+
+                },
+                LocalOrUsizeEnum::Usize(usize) => {
+                    total_offset += usize;
+                },
+            }
+        }
+
+        let return_size: usize = get_ty_size(local_type, 0);
+
+        let new_stmt = Statement {
+            source_info: stmt.source_info,
+            kind: StatementKind::Assign(Box::new((usize_temp_2.into(), Rvalue::Use(Operand::Constant(Box::new(ConstOperand { span: SPANS[0], user_ty: None, const_: Const::from_scalar(tcx, Scalar::Int(ScalarInt::from(return_size as u64)), Ty::new(tcx, ty::Uint(ty::UintTy::Usize))) })))))),
+        };
+        data.statements.push(new_stmt.clone());
+
+        let deref_terminator = call_index_mut_bound(tcx, *root, root_temp_refs.clone(), usize_temp_2, &generics_list, usize_temp, _empty_tuple_temp, deref_block, data.is_cleanup.clone(), rapture_crate_number);
         let size_calc_block = patch.new_block(BasicBlockData {
             statements: vec![new_stmt],
             terminator: Some(data.terminator.as_ref().unwrap().clone()),
@@ -426,6 +555,55 @@ fn inject_deref<'tcx> (
         });
         patch.patch_terminator(size_calc_block, deref_terminator);
         *expected_terminator = call_size_of(tcx, local, local_sizes.clone(), &generics_list_for_size, size_calc_block, data.is_cleanup.clone());
+    }
+}
+
+#[derive(Clone)]
+#[derive(Debug)]
+pub enum LocalOrUsizeEnum {
+    // TODO: add a new enum case that record an index + a local for calculating indexed offset. Make sure the units match
+    Local(Local), // make sure this is non-indexed access and we always want the full-sized offset
+    Usize(usize), // make sure this is only used for constant (explicitly byte-numbered) offsets
+}
+
+fn compute_propagated_offset<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    past_cast_indices: &Vec<LocalOrUsizeEnum>,   // The specific vector for this particular variable, this is the main input
+    dest_local: Local,                           // The final variable that will hold the propagated offset
+    data: &mut BasicBlockData<'tcx>,
+    i: usize,
+)
+{
+    // Note: This function should only be called after the basic block is broken (post-shifting/nooping) in preparation for the function call injection
+    // That is the only way the pushed statements can justify their presence (else they get removed)
+
+    let new_stmt = Statement {
+        source_info: data.statements[i].source_info,
+        kind: StatementKind::Assign(Box::new((dest_local.into(), Rvalue::Use(Operand::Constant(Box::new(ConstOperand { span: SPANS[0], user_ty: None, const_: Const::from_scalar(tcx, Scalar::Int(ScalarInt::from(0 as u64)), Ty::new(tcx, ty::Uint(ty::UintTy::Usize))) })))))),
+    };
+    data.statements.push(new_stmt);
+
+    if past_cast_indices.len() == 0 {
+        return;
+    }
+
+    for index in past_cast_indices.iter() {
+        match index {
+            LocalOrUsizeEnum::Local(local) => {
+                let new_stmt = Statement {
+                    source_info: data.statements[i].source_info,
+                    kind: StatementKind::Assign(Box::new((dest_local.into(), Rvalue::BinaryOp(rustc_middle::mir::BinOp::Add, Box::new((Operand::Copy(Place { local: dest_local, projection: List::empty()}), Operand::Copy(Place { local: (*local).clone(), projection: List::empty() })))) ))),
+                };
+                data.statements.push(new_stmt);
+            },
+            LocalOrUsizeEnum::Usize(usize) => {
+                let new_stmt = Statement {
+                    source_info: data.statements[i].source_info,
+                    kind: StatementKind::Assign(Box::new((dest_local.into(), Rvalue::BinaryOp(rustc_middle::mir::BinOp::Add, Box::new((Operand::Copy(Place { local: dest_local, projection: List::empty() }), Operand::Constant(Box::new(ConstOperand { span: SPANS[0], user_ty: None, const_: Const::from_scalar(tcx, Scalar::Int(ScalarInt::from(*usize as u64)), Ty::new(tcx, ty::Uint(ty::UintTy::Usize))) })))) )))),
+                };
+                data.statements.push(new_stmt);
+            },
+        }
     }
 }
 
@@ -610,10 +788,9 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
         println!("***********************tracked tmps: {:?}", tracked_locals);
 
         // Creating a fixed number of temporary variables of fixed type to be used by our injected functions
-        let return_type_1 = Ty::new(tcx, ty::Bool);
-        let _temp_1 = body.local_decls.push(LocalDecl::new(return_type_1, SPANS[0]));
-        let return_type_2 = Ty::new(tcx, ty::Bool);
-        let _temp_2 = body.local_decls.push(LocalDecl::new(return_type_2, SPANS[0]));
+        let usize_temp_type = Ty::new(tcx, ty::Uint(UintTy::Usize));
+        let usize_temp = body.local_decls.push(LocalDecl::new(usize_temp_type, SPANS[0]));
+        let usize_temp_2 = body.local_decls.push(LocalDecl::new(usize_temp_type, SPANS[0]));
         let _empty_tuple = Ty::new(tcx, ty::Tuple(List::empty()));
         let _empty_tuple_temp = body.local_decls.push(LocalDecl::new(_empty_tuple, SPANS[0]));
 
@@ -687,7 +864,8 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
             root_temp_refs.insert(*root, reftemp);
         }
 
-        let mut root_references: FxHashMap<Local, FxHashMap<Local, (i32, Vec<(bool, usize)>)>> = FxHashMap::default();
+        let mut root_references: FxHashMap<Local, FxHashMap<Local, (i32, Vec<(bool, usize)>, Vec<LocalOrUsizeEnum>)>> = FxHashMap::default();
+        let local_decls_clone = body.local_decls.clone();
 
         // let root_references_retrieve = &mut root_references as 
         // *mut FxHashMap<Local, FxHashMap<Local, (i32, Vec<(bool, usize)>)>> as *mut FxHashMap<Local, FxHashMap<Local, (i32, Vec<(bool, *const Place<'tcx>)>)>>;
@@ -741,7 +919,8 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                             let local = lhs.local.clone();
 
                             inject_deref(tcx, data, &stmt, local, _empty_tuple_temp, i, size_temp, &mut expected_terminator, &mut patch, &roots, 
-                                &mut new_temps_counter, &mut local_sizes, &root_temps, &root_temp_refs, &root_generics, &dlt_generics, rapture_crate_number);
+                                &mut new_temps_counter, &mut local_sizes, &root_temps, &root_temp_refs, &root_generics, &dlt_generics, rapture_crate_number, usize_temp, root_references.clone(),
+                                &local_decls_clone, usize_temp_2);
                         }
                         match rhs {
                             Rvalue::Cast( .., operand, _ty) => {
@@ -751,7 +930,8 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                             let local = place.local.clone();
                                             
                                             inject_deref(tcx, data, &stmt, local, _empty_tuple_temp, i, size_temp, &mut expected_terminator, &mut patch, &roots, 
-                                                &mut new_temps_counter, &mut local_sizes, &root_temps, &root_temp_refs, &root_generics, &dlt_generics, rapture_crate_number);
+                                                &mut new_temps_counter, &mut local_sizes, &root_temps, &root_temp_refs, &root_generics, &dlt_generics, rapture_crate_number, usize_temp, root_references.clone(),
+                                                &local_decls_clone, usize_temp_2);
                                         },
                                         _ => (),
                                     }
@@ -765,7 +945,8 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                                 let local = place.local.clone();
                                                 
                                                 inject_deref(tcx, data, &stmt, local, _empty_tuple_temp, i, size_temp, &mut expected_terminator, &mut patch, &roots, 
-                                                    &mut new_temps_counter, &mut local_sizes, &root_temps, &root_temp_refs, &root_generics, &dlt_generics, rapture_crate_number);
+                                                    &mut new_temps_counter, &mut local_sizes, &root_temps, &root_temp_refs, &root_generics, &dlt_generics, rapture_crate_number, usize_temp, root_references.clone(),
+                                                    &local_decls_clone, usize_temp_2);
                                             },
                                             _ => (),
                                         }
@@ -780,7 +961,8 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                             let local = place.local.clone();
                                             
                                             inject_deref(tcx, data, &stmt, local, _empty_tuple_temp, i, size_temp, &mut expected_terminator, &mut patch, &roots, 
-                                                &mut new_temps_counter, &mut local_sizes, &root_temps, &root_temp_refs, &root_generics, &dlt_generics, rapture_crate_number);
+                                                &mut new_temps_counter, &mut local_sizes, &root_temps, &root_temp_refs, &root_generics, &dlt_generics, rapture_crate_number, usize_temp, root_references.clone(),
+                                                &local_decls_clone, usize_temp_2);
                                         },
                                         _ => (),
                                     }
@@ -791,7 +973,8 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                             let local = place.local.clone();
                                             
                                             inject_deref(tcx, data, &stmt, local, _empty_tuple_temp, i, size_temp, &mut expected_terminator, &mut patch, &roots, 
-                                                &mut new_temps_counter, &mut local_sizes, &root_temps, &root_temp_refs, &root_generics, &dlt_generics, rapture_crate_number);
+                                                &mut new_temps_counter, &mut local_sizes, &root_temps, &root_temp_refs, &root_generics, &dlt_generics, rapture_crate_number, usize_temp, root_references.clone(),
+                                                &local_decls_clone, usize_temp_2);
                                         },
                                         _ => (),
                                     }
@@ -803,7 +986,8 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                     let local = place.local.clone();
                                     
                                     inject_deref(tcx, data, &stmt, local, _empty_tuple_temp, i, size_temp, &mut expected_terminator, &mut patch, &roots, 
-                                        &mut new_temps_counter, &mut local_sizes, &root_temps, &root_temp_refs, &root_generics, &dlt_generics, rapture_crate_number);
+                                        &mut new_temps_counter, &mut local_sizes, &root_temps, &root_temp_refs, &root_generics, &dlt_generics, rapture_crate_number, usize_temp, root_references.clone(),
+                                        &local_decls_clone, usize_temp_2);
                                 }
                             },
                             Rvalue::Repeat(operand, ..) | Rvalue::ShallowInitBox(operand, ..) | Rvalue::UnaryOp(.., operand) | Rvalue::Use(operand) => {
@@ -813,7 +997,8 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                             let local = place.local.clone();
                                             
                                             inject_deref(tcx, data, &stmt, local, _empty_tuple_temp, i, size_temp, &mut expected_terminator, &mut patch, &roots, 
-                                                &mut new_temps_counter, &mut local_sizes, &root_temps, &root_temp_refs, &root_generics, &dlt_generics, rapture_crate_number);
+                                                &mut new_temps_counter, &mut local_sizes, &root_temps, &root_temp_refs, &root_generics, &dlt_generics, rapture_crate_number, usize_temp, root_references.clone(),
+                                                &local_decls_clone, usize_temp_2);
                                         },
                                         _ => (),
                                     }
