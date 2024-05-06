@@ -1516,7 +1516,7 @@ pub fn main() -> ! {
         }
 
         if !IS_BOOTSTRAP {
-            eprintln!("\nCompiling using CAPSTONE-Rust custom compiler (v0.95)\n");
+            eprintln!("\nCompiling using CAPSTONE-Rust custom compiler (v0.99)\n");
         }
     }
 

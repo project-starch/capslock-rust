@@ -70,12 +70,13 @@ fn record_place_derefences(alloc_roots: &Vec<Local>, root_references: &mut FxHas
         if !root_references[&place.local].contains_key(&lhs.local) {
             let mut past_cast_indices: Vec<LocalOrUsizeEnum> = vec![];
             for proj in place.projection.iter() {
-                if whether_projection_index_variable(proj) {
-                    past_cast_indices.push(LocalOrUsizeEnum::Local(variable_projection_index(proj)));
-                }
-                else {
-                    past_cast_indices.push(LocalOrUsizeEnum::Usize(constant_projection_index(proj)));
-                }
+                // if whether_projection_index_variable(proj) {
+                //     past_cast_indices.push(LocalOrUsizeEnum::Local(variable_projection_index(proj)));
+                // }
+                // else {
+                //     past_cast_indices.push(LocalOrUsizeEnum::Usize(constant_projection_index(proj)));
+                // }
+                past_cast_indices.push(get_record_proj_elem(proj, place.local.clone()));
                 println!("For local: {:?}, After proj: {:?}, past_cast_indices: {:?}", lhs.local.clone(), proj, past_cast_indices);
             }
             root_references.get_mut(&place.local).unwrap().insert(lhs.local.clone(), (deref_depth, vec![(create_ref, place as *const Place<'_> as usize)], past_cast_indices));
@@ -93,12 +94,13 @@ fn record_place_derefences(alloc_roots: &Vec<Local>, root_references: &mut FxHas
                 if !root_references[root].contains_key(&lhs.local) {
                     let mut past_cast_indices: Vec<LocalOrUsizeEnum> = root_references[root][&place.local].2.clone();
                     for proj in place.projection.iter() {
-                        if whether_projection_index_variable(proj) {
-                            past_cast_indices.push(LocalOrUsizeEnum::Local(variable_projection_index(proj)));
-                        }
-                        else {
-                            past_cast_indices.push(LocalOrUsizeEnum::Usize(constant_projection_index(proj)));
-                        }
+                        // if whether_projection_index_variable(proj) {
+                        //     past_cast_indices.push(LocalOrUsizeEnum::Local(variable_projection_index(proj)));
+                        // }
+                        // else {
+                        //     past_cast_indices.push(LocalOrUsizeEnum::Usize(constant_projection_index(proj)));
+                        // }
+                        past_cast_indices.push(get_record_proj_elem(proj, place.local.clone()));
                         println!("For local: {:?}, After proj: {:?}, past_cast_indices: {:?}", lhs.local.clone(), proj, past_cast_indices);
                     }
                     root_references.get_mut(root).unwrap().insert(lhs.local.clone(), (deref_depth, vec![(create_ref, place as *const Place<'_> as usize)], past_cast_indices));
@@ -419,10 +421,10 @@ fn get_ty_size(kind: Ty<'_>, index: usize) -> usize {
         // }
         ty::Foreign(_) => return_size = std::mem::size_of::<usize>(), // foreign types as a pointer?
         ty::Str => return_size = std::mem::size_of::<i8>(), // size of a single byte-sized slice
-        ty::Array(t, _) => return_size = get_ty_size(t.clone()), // size of a single item slice
-        ty::Slice(t) => return_size = get_ty_size(t.clone()),
-        ty::RawPtr(TypeAndMut { ty, .. }) => return_size = get_ty_size(ty.clone()), // Do we want this to be usize (actual size of a raw pointer instead of pointed-to memory?)
-        ty::Ref(_, t, _) => return_size = get_ty_size(t.clone()),
+        ty::Array(t, _) => return_size = get_ty_size(t.clone(), 0) * index, // size of a single item slice
+        ty::Slice(t) => return_size = get_ty_size(t.clone(), 0) * index,
+        ty::RawPtr(TypeAndMut { ty, .. }) => return_size = get_ty_size(ty.clone(), 0), // Do we want this to be usize (actual size of a raw pointer instead of pointed-to memory?)
+        ty::Ref(_, t, _) => return_size = get_ty_size(t.clone(), 0),
         // TyKind::Dynamic(p, r, repr) => match repr {
         //     DynKind::Dyn => write!(f, "dyn {:?} + {:?}", &this.wrap(p), &this.wrap(r)),
         //     DynKind::DynStar => {
@@ -431,8 +433,13 @@ fn get_ty_size(kind: Ty<'_>, index: usize) -> usize {
         // },
         // TyKind::Closure(d, s) => f.debug_tuple("Closure").field(d).field(&this.wrap(s)).finish(),
         ty::Tuple(t) => {
+            let mut counter = 0;
             for ty in *t {
-                return_size += get_ty_size(ty.clone());
+                if counter < index{
+                    counter += 1;
+                    return_size += get_ty_size(ty.clone(), 0);
+                    println!("********************INCREASE RETURN SIZE FOR TUPLE, CURRENT COUNTER: {:?}, CURRENT SIZE SUM: {:?}", counter, return_size.clone());
+                }
             }
         },
         // TyKind::Alias(i, a) => f.debug_tuple("Alias").field(i).field(&this.wrap(a)).finish(),
@@ -520,30 +527,31 @@ fn inject_deref<'tcx> (
         else {
             past_cast_indices = vec![];
         }
-        compute_propagated_offset(tcx, &past_cast_indices, usize_temp, data, i);
+        // compute_propagated_offset(tcx, &past_cast_indices, usize_temp, data, i);
 
-        let local_type = local_decls[local].ty;
+        // let local_type = local_decls[local].ty;
 
-        let rooot = root_references[root].get(&local).unwrap().2.clone();
-        let total_offset = 0;
-
-        for index_enum in rooot.iter() {
+        let mut total_offset = 0;
+        
+        for index_enum in past_cast_indices.iter() {
             match index_enum {
                 LocalOrUsizeEnum::Local(local) => {
                     let index_type = local_decls[local.clone()].ty;
-
+                    total_offset += get_ty_size(index_type, 0);
                 },
-                LocalOrUsizeEnum::Usize(usize) => {
-                    total_offset += usize;
+                LocalOrUsizeEnum::Usize(size) => {
+                    total_offset += *size;
+                },
+                LocalOrUsizeEnum::TypedOffset(size, local) => {
+                    let index_type = local_decls[local.clone()].ty;
+                    total_offset += get_ty_size(index_type, *size);
                 },
             }
         }
 
-        let return_size: usize = get_ty_size(local_type, 0);
-
         let new_stmt = Statement {
             source_info: stmt.source_info,
-            kind: StatementKind::Assign(Box::new((usize_temp_2.into(), Rvalue::Use(Operand::Constant(Box::new(ConstOperand { span: SPANS[0], user_ty: None, const_: Const::from_scalar(tcx, Scalar::Int(ScalarInt::from(return_size as u64)), Ty::new(tcx, ty::Uint(ty::UintTy::Usize))) })))))),
+            kind: StatementKind::Assign(Box::new((usize_temp_2.into(), Rvalue::Use(Operand::Constant(Box::new(ConstOperand { span: SPANS[0], user_ty: None, const_: Const::from_scalar(tcx, Scalar::Int(ScalarInt::from(total_offset as u64)), Ty::new(tcx, ty::Uint(ty::UintTy::Usize))) })))))),
         };
         data.statements.push(new_stmt.clone());
 
@@ -564,89 +572,118 @@ pub enum LocalOrUsizeEnum {
     // TODO: add a new enum case that record an index + a local for calculating indexed offset. Make sure the units match
     Local(Local), // make sure this is non-indexed access and we always want the full-sized offset
     Usize(usize), // make sure this is only used for constant (explicitly byte-numbered) offsets
+    TypedOffset(usize, Local),
 }
 
-fn compute_propagated_offset<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    past_cast_indices: &Vec<LocalOrUsizeEnum>,   // The specific vector for this particular variable, this is the main input
-    dest_local: Local,                           // The final variable that will hold the propagated offset
-    data: &mut BasicBlockData<'tcx>,
-    i: usize,
-)
-{
-    // Note: This function should only be called after the basic block is broken (post-shifting/nooping) in preparation for the function call injection
-    // That is the only way the pushed statements can justify their presence (else they get removed)
+// fn compute_propagated_offset<'tcx>(
+//     tcx: TyCtxt<'tcx>,
+//     past_cast_indices: &Vec<LocalOrUsizeEnum>,   // The specific vector for this particular variable, this is the main input
+//     dest_local: Local,                           // The final variable that will hold the propagated offset
+//     data: &mut BasicBlockData<'tcx>,
+//     i: usize,
+// )
+// {
+//     // Note: This function should only be called after the basic block is broken (post-shifting/nooping) in preparation for the function call injection
+//     // That is the only way the pushed statements can justify their presence (else they get removed)
 
-    let new_stmt = Statement {
-        source_info: data.statements[i].source_info,
-        kind: StatementKind::Assign(Box::new((dest_local.into(), Rvalue::Use(Operand::Constant(Box::new(ConstOperand { span: SPANS[0], user_ty: None, const_: Const::from_scalar(tcx, Scalar::Int(ScalarInt::from(0 as u64)), Ty::new(tcx, ty::Uint(ty::UintTy::Usize))) })))))),
-    };
-    data.statements.push(new_stmt);
+//     let new_stmt = Statement {
+//         source_info: data.statements[i].source_info,
+//         kind: StatementKind::Assign(Box::new((dest_local.into(), Rvalue::Use(Operand::Constant(Box::new(ConstOperand { span: SPANS[0], user_ty: None, const_: Const::from_scalar(tcx, Scalar::Int(ScalarInt::from(0 as u64)), Ty::new(tcx, ty::Uint(ty::UintTy::Usize))) })))))),
+//     };
+//     data.statements.push(new_stmt);
 
-    if past_cast_indices.len() == 0 {
-        return;
-    }
+//     if past_cast_indices.len() == 0 {
+//         return;
+//     }
 
-    for index in past_cast_indices.iter() {
-        match index {
-            LocalOrUsizeEnum::Local(local) => {
-                let new_stmt = Statement {
-                    source_info: data.statements[i].source_info,
-                    kind: StatementKind::Assign(Box::new((dest_local.into(), Rvalue::BinaryOp(rustc_middle::mir::BinOp::Add, Box::new((Operand::Copy(Place { local: dest_local, projection: List::empty()}), Operand::Copy(Place { local: (*local).clone(), projection: List::empty() })))) ))),
-                };
-                data.statements.push(new_stmt);
-            },
-            LocalOrUsizeEnum::Usize(usize) => {
-                let new_stmt = Statement {
-                    source_info: data.statements[i].source_info,
-                    kind: StatementKind::Assign(Box::new((dest_local.into(), Rvalue::BinaryOp(rustc_middle::mir::BinOp::Add, Box::new((Operand::Copy(Place { local: dest_local, projection: List::empty() }), Operand::Constant(Box::new(ConstOperand { span: SPANS[0], user_ty: None, const_: Const::from_scalar(tcx, Scalar::Int(ScalarInt::from(*usize as u64)), Ty::new(tcx, ty::Uint(ty::UintTy::Usize))) })))) )))),
-                };
-                data.statements.push(new_stmt);
-            },
-        }
-    }
-}
+//     for index in past_cast_indices.iter() {
+//         match index {
+//             LocalOrUsizeEnum::Local(local) => {
+//                 let new_stmt = Statement {
+//                     source_info: data.statements[i].source_info,
+//                     kind: StatementKind::Assign(Box::new((dest_local.into(), Rvalue::BinaryOp(rustc_middle::mir::BinOp::Add, Box::new((Operand::Copy(Place { local: dest_local, projection: List::empty()}), Operand::Copy(Place { local: (*local).clone(), projection: List::empty() })))) ))),
+//                 };
+//                 data.statements.push(new_stmt);
+//             },
+//             LocalOrUsizeEnum::Usize(usize) => {
+//                 let new_stmt = Statement {
+//                     source_info: data.statements[i].source_info,
+//                     kind: StatementKind::Assign(Box::new((dest_local.into(), Rvalue::BinaryOp(rustc_middle::mir::BinOp::Add, Box::new((Operand::Copy(Place { local: dest_local, projection: List::empty() }), Operand::Constant(Box::new(ConstOperand { span: SPANS[0], user_ty: None, const_: Const::from_scalar(tcx, Scalar::Int(ScalarInt::from(*usize as u64)), Ty::new(tcx, ty::Uint(ty::UintTy::Usize))) })))) )))),
+//                 };
+//                 data.statements.push(new_stmt);
+//             },
+//         }
+//     }
+// }
 
-fn variable_projection_index<V, T>(projection: ProjectionElem<V, T>) -> V {
+// fn variable_projection_index<V, T>(projection: ProjectionElem<V, T>) -> V {
+//     match projection {
+//         ProjectionElem::Index(local) => {
+//             local
+//         },
+//         _ => {println!("Constant index found in projection"); panic!()},
+//     }
+// }
+
+fn get_record_proj_elem<T>(projection: ProjectionElem<Local, T>, local: Local) -> LocalOrUsizeEnum {
     match projection {
-        ProjectionElem::Index(local) => {
-            local
+        ProjectionElem::Field(fieldindex, _ty) => {
+            println!("*******************TUPLE FIELD INDEX: {:?}", fieldindex);
+            LocalOrUsizeEnum::TypedOffset(usize::from(fieldindex), local.clone())
         },
-        _ => {println!("Constant index found in projection"); panic!()},
-    }
-}
-
-fn constant_projection_index<V, T>(projection: ProjectionElem<V, T>) -> usize {
-    match projection {
-        ProjectionElem::Field(fieldindex, _ty) => usize::from(fieldindex),
         ProjectionElem::ConstantIndex {offset, min_length, from_end} => {
             if from_end {
-                (min_length as usize - offset as usize).try_into().unwrap()
+                LocalOrUsizeEnum::Usize((min_length as usize - offset as usize).try_into().unwrap())
             }
             else {
-                offset as usize
+                LocalOrUsizeEnum::Usize(offset as usize)
             }
         },
         ProjectionElem::Subslice {from, to, from_end} => {
             if from_end {
-                (to - from).try_into().unwrap()
+                LocalOrUsizeEnum::TypedOffset((to - from).try_into().unwrap(), local.clone())
             }
             else {
-                from.try_into().unwrap()
+                LocalOrUsizeEnum::TypedOffset(from.try_into().unwrap(), local.clone())
             }
         },
-        ProjectionElem::Downcast(_symbol, variant_index) => usize::from(variant_index),
-        ProjectionElem::Index(_) => {println!("Variable index found in projection"); 0},
-        _ => 0,
+        ProjectionElem::Downcast(_symbol, variant_index) => LocalOrUsizeEnum::Usize(usize::from(variant_index)),
+        ProjectionElem::Index(i) => LocalOrUsizeEnum::Local(i),
+        _ => LocalOrUsizeEnum::Usize(0),
     }
 }
 
-fn whether_projection_index_variable<V, T>(projection: ProjectionElem<V, T>) -> bool {
-    match projection {
-        ProjectionElem::Index(_) => true,
-        _ => false,
-    }
-}
+// fn constant_projection_index<V, T>(projection: ProjectionElem<V, T>) -> usize {
+//     match projection {
+//         ProjectionElem::Field(fieldindex, _ty) => usize::from(fieldindex),
+//         ProjectionElem::ConstantIndex {offset, min_length, from_end} => {
+//             if from_end {
+//                 (min_length as usize - offset as usize).try_into().unwrap()
+//             }
+//             else {
+//                 offset as usize
+//             }
+//         },
+//         ProjectionElem::Subslice {from, to, from_end} => {
+//             if from_end {
+//                 (to - from).try_into().unwrap()
+//             }
+//             else {
+//                 from.try_into().unwrap()
+//             }
+//         },
+//         ProjectionElem::Downcast(_symbol, variant_index) => usize::from(variant_index),
+//         ProjectionElem::Index(_) => {println!("Variable index found in projection"); 0},
+//         _ => 0,
+//     }
+// }
+
+// fn whether_projection_index_variable<V, T>(projection: ProjectionElem<V, T>) -> bool {
+//     match projection {
+//         ProjectionElem::Index(_) => true,
+//         _ => false,
+//     }
+// }
 
 impl<'tcx> MirPass<'tcx> for InjectCapstone {
     fn run_pass(&self, tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
