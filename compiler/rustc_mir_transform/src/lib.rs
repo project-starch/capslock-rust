@@ -632,6 +632,8 @@ fn run_optimization_passes<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
                 &prettify::ReorderLocals,
                 // CAPSTONE-injection pass.
                 &inject_capstone::InjectCapstone,
+                // &prettify::ReorderBasicBlocks,
+                // &prettify::ReorderLocals,
                 // Dump the end result for testing and debugging purposes.
                 &dump_mir::Marker("PreCodegen"),
             ],

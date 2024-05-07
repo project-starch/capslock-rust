@@ -15,9 +15,9 @@ use crate::ty::Ty;
 use crate::{IndexVec, Spanned};
 // use rustc_middle::mir::HasLocalDecls;
 // use rustc_middle::mir::{dump_mir, PassWhere};
-use rustc_middle::mir::{
-    /*traversal,*/ BasicBlock, BasicBlockData, Body, BorrowKind, CallSource, CastKind, Const, ConstOperand, ConstValue, InlineAsmOperand, Local, LocalDecl, MutBorrowKind, Operand, Place, Rvalue, Statement, StatementKind, TerminatorKind, UnwindAction, UnwindTerminateReason, START_BLOCK, ProjectionElem
-};
+use rustc_index::IndexSlice;
+use rustc_middle::mir::*;
+use rustc_middle::mir::visit::MutVisitor;
 use rustc_middle::mir::interpret::Scalar;
 // use crate::ty::ty_kind;
 use rustc_middle::ty::{self, ScalarInt, TyCtxt, IntTy, UintTy, FloatTy, TypeAndMut};
@@ -32,13 +32,49 @@ use rustc_middle::ty::{List, GenericArg};
 use rustc_span::{DUMMY_SP, Symbol};
 static SPANS: [rustc_span::Span; 1] = [DUMMY_SP];
 
+struct BasicBlockUpdater<'tcx> {
+    map: IndexVec<BasicBlock, BasicBlock>,
+    tcx: TyCtxt<'tcx>,
+}
+
+impl<'tcx> MutVisitor<'tcx> for BasicBlockUpdater<'tcx> {
+    fn tcx(&self) -> TyCtxt<'tcx> {
+        self.tcx
+    }
+
+    fn visit_terminator(&mut self, terminator: &mut Terminator<'tcx>, _location: Location) {
+        for succ in terminator.successors_mut() {
+            *succ = self.map[*succ];
+        }
+    }
+}
+
+fn permute<I: rustc_index::Idx + Ord, T>(data: &mut IndexVec<I, T>, map: &IndexSlice<I, I>) {
+    // FIXME: It would be nice to have a less-awkward way to apply permutations,
+    // but I don't know one that exists.  `sort_by_cached_key` has logic for it
+    // internally, but not in a way that we're allowed to use here.
+    let mut enumerated: Vec<_> = std::mem::take(data).into_iter_enumerated().collect();
+    enumerated.sort_by_key(|p| map[p.0]);
+    *data = enumerated.into_iter().map(|p| p.1).collect();
+}
+
 pub struct InjectCapstone;
 
-fn handle_operands(alloc_roots: &mut Vec<Local>, tracked_locals: &mut Vec<Local>, operand: &Operand<'_>, lhs: &Place<'_>) {
+fn handle_operands(alloc_roots: &mut Vec<Local>, tracked_locals: &mut Vec<Local>, operand: &Operand<'_>, lhs: &Place<'_>, local_decls: &IndexVec<Local, LocalDecl<'_>>) {
     match operand {
         &Operand::Copy(place) | &Operand::Move(place) => {
-            if !tracked_locals.contains(&place.local){
-                tracked_locals.push(place.local.clone());
+            let ty = local_decls[place.local].ty;
+            match ty.kind() {
+                ty::Ref(..) | ty::RawPtr(..) | ty::Alias(..) => {
+                    if !tracked_locals.contains(&place.local) {
+                        tracked_locals.push(place.local.clone());
+                    }
+                },
+                _ => {
+                    if !alloc_roots.contains(&lhs.local) {
+                        alloc_roots.push(lhs.local.clone());
+                    }
+                },
             }
         },
         &Operand::Constant(_) => {
@@ -437,8 +473,8 @@ fn get_ty_size(kind: Ty<'_>, index: usize) -> usize {
             for ty in *t {
                 if counter < index{
                     counter += 1;
-                    return_size += get_ty_size(ty.clone(), 0);
-                    println!("********************INCREASE RETURN SIZE FOR TUPLE, CURRENT COUNTER: {:?}, CURRENT SIZE SUM: {:?}", counter, return_size.clone());
+                    return_size += get_ty_size(ty.clone(), usize::MAX);
+                    // println!("********************INCREASE RETURN SIZE FOR TUPLE, CURRENT COUNTER: {:?}, CURRENT SIZE SUM: {:?}", counter, return_size.clone());
                 }
             }
         },
@@ -529,7 +565,8 @@ fn inject_deref<'tcx> (
         }
         // compute_propagated_offset(tcx, &past_cast_indices, usize_temp, data, i);
 
-        // let local_type = local_decls[local].ty;
+        let local_type = local_decls[local].ty;
+        let local_size = get_ty_size(local_type, usize::MAX);
 
         let mut total_offset = 0;
         
@@ -549,13 +586,20 @@ fn inject_deref<'tcx> (
             }
         }
 
-        let new_stmt = Statement {
+        let new_stmt_bytesize = Statement {
+            source_info: stmt.source_info,
+            kind: StatementKind::Assign(Box::new((usize_temp.into(), Rvalue::Use(Operand::Constant(Box::new(ConstOperand { span: SPANS[0], user_ty: None, const_: Const::from_scalar(tcx, Scalar::Int(ScalarInt::from(local_size as u64)), Ty::new(tcx, ty::Uint(ty::UintTy::Usize))) })))))),
+        };
+        data.statements.push(new_stmt_bytesize.clone());
+        
+        let new_stmt_offset = Statement {
             source_info: stmt.source_info,
             kind: StatementKind::Assign(Box::new((usize_temp_2.into(), Rvalue::Use(Operand::Constant(Box::new(ConstOperand { span: SPANS[0], user_ty: None, const_: Const::from_scalar(tcx, Scalar::Int(ScalarInt::from(total_offset as u64)), Ty::new(tcx, ty::Uint(ty::UintTy::Usize))) })))))),
         };
-        data.statements.push(new_stmt.clone());
+        data.statements.push(new_stmt_offset.clone());
+        println!("***********local type: {:?}, local size: {:?}, total offset: {:?}, root: {:?}", local_type, local_size, total_offset, root);
 
-        let deref_terminator = call_index_mut_bound(tcx, *root, root_temp_refs.clone(), usize_temp_2, &generics_list, usize_temp, _empty_tuple_temp, deref_block, data.is_cleanup.clone(), rapture_crate_number);
+        let deref_terminator = call_index_mut_bound(tcx, *root, root_temp_refs.clone(), usize_temp, &generics_list, usize_temp_2, _empty_tuple_temp, deref_block, data.is_cleanup.clone(), rapture_crate_number);
         let size_calc_block = patch.new_block(BasicBlockData {
             statements: vec![new_stmt],
             terminator: Some(data.terminator.as_ref().unwrap().clone()),
@@ -688,6 +732,8 @@ fn get_record_proj_elem<T>(projection: ProjectionElem<Local, T>, local: Local) -
 impl<'tcx> MirPass<'tcx> for InjectCapstone {
     fn run_pass(&self, tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
         println!("\nStart of CAPSTONE-Injection pass for function: {}", tcx.def_path_str(body.source.def_id()));
+        let local_decls_clone = body.local_decls.clone();
+
         let mut patch = MirPatch::new(body);
 
         let mut rapture_crate_number: usize = 0;
@@ -710,11 +756,11 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                             // Add that assigned value and the root to the RootAllocations struct
                             Rvalue::Cast(cast_type, operand, ..) => {
                                 if tracked_locals.contains(&lhs.local) {
-                                    handle_operands(&mut alloc_roots, &mut tracked_locals, &operand, &lhs);
+                                    handle_operands(&mut alloc_roots, &mut tracked_locals, &operand, &lhs, &local_decls_clone);
                                 }
                                 match cast_type {     
                                     CastKind::PtrToPtr => {
-                                        handle_operands(&mut alloc_roots, &mut tracked_locals, &operand, &lhs);
+                                        handle_operands(&mut alloc_roots, &mut tracked_locals, &operand, &lhs, &local_decls_clone);
                                     },
                                     _ => (),
                                 }
@@ -722,15 +768,15 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                             Rvalue::Aggregate( .., operands) => {
                                 if tracked_locals.contains(&lhs.local) {
                                     for operand in operands.iter(){
-                                        handle_operands(&mut alloc_roots, &mut tracked_locals, &operand, &lhs);
+                                        handle_operands(&mut alloc_roots, &mut tracked_locals, &operand, &lhs, &local_decls_clone);
                                     }
                                 }
                             },
                             Rvalue::BinaryOp(  .., boxed_operands) | Rvalue::CheckedBinaryOp( .., boxed_operands) => {
                                 let (first, second) = *(boxed_operands.clone());
                                 if tracked_locals.contains(&lhs.local) {
-                                    handle_operands(&mut alloc_roots, &mut tracked_locals, &first, &lhs);
-                                    handle_operands(&mut alloc_roots, &mut tracked_locals, &second, &lhs);
+                                    handle_operands(&mut alloc_roots, &mut tracked_locals, &first, &lhs, &local_decls_clone);
+                                    handle_operands(&mut alloc_roots, &mut tracked_locals, &second, &lhs, &local_decls_clone);
                                 }
                             },
                             Rvalue::AddressOf(.., place) => {
@@ -760,22 +806,22 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                             },
                             Rvalue::Repeat(operand, ..) => {
                                 if tracked_locals.contains(&lhs.local) {
-                                    handle_operands(&mut alloc_roots, &mut tracked_locals, &operand, &lhs);
+                                    handle_operands(&mut alloc_roots, &mut tracked_locals, &operand, &lhs, &local_decls_clone);
                                 }
                             },
                             Rvalue::ShallowInitBox(operand, ..) => {
                                 if tracked_locals.contains(&lhs.local) {
-                                    handle_operands(&mut alloc_roots, &mut tracked_locals, &operand, &lhs);
+                                    handle_operands(&mut alloc_roots, &mut tracked_locals, &operand, &lhs, &local_decls_clone);
                                 }
                             },
                             Rvalue::UnaryOp(.., operand) => {
                                 if tracked_locals.contains(&lhs.local) {
-                                    handle_operands(&mut alloc_roots, &mut tracked_locals, &operand, &lhs);
+                                    handle_operands(&mut alloc_roots, &mut tracked_locals, &operand, &lhs, &local_decls_clone);
                                 }
                             },
                             Rvalue::Use(operand) => {
                                 if tracked_locals.contains(&lhs.local) {
-                                    handle_operands(&mut alloc_roots, &mut tracked_locals, &operand, &lhs);
+                                    handle_operands(&mut alloc_roots, &mut tracked_locals, &operand, &lhs, &local_decls_clone);
                                 }
                             },
                             _ => (),
@@ -902,7 +948,6 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
         }
 
         let mut root_references: FxHashMap<Local, FxHashMap<Local, (i32, Vec<(bool, usize)>, Vec<LocalOrUsizeEnum>)>> = FxHashMap::default();
-        let local_decls_clone = body.local_decls.clone();
 
         // let root_references_retrieve = &mut root_references as 
         // *mut FxHashMap<Local, FxHashMap<Local, (i32, Vec<(bool, usize)>)>> as *mut FxHashMap<Local, FxHashMap<Local, (i32, Vec<(bool, *const Place<'tcx>)>)>>;
@@ -1186,6 +1231,21 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
         }
 
         patch.apply(body);
+
+        // reorder basic blocks
+        let rpo: IndexVec<BasicBlock, BasicBlock> =
+            body.basic_blocks.reverse_postorder().iter().copied().collect();
+        if rpo.iter().is_sorted() {
+            return;
+        }
+
+        let mut updater = BasicBlockUpdater { map: rpo.invert_bijective_mapping(), tcx };
+        debug_assert_eq!(updater.map[START_BLOCK], START_BLOCK);
+        updater.visit_body(body);
+
+        permute(body.basic_blocks.as_mut(), &updater.map);
+        // reorder ends
+
         patch = MirPatch::new(body);
 
         // Traverse the basic blocks in DFS order by following the targets of the terminators
@@ -1280,6 +1340,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
         }
 
         for (bb, data) in body.basic_blocks.iter().enumerate() {
+            if data.is_cleanup {continue;}
             match &data.terminator {
                 Some(x) => {
                     let mut successor_count = 0;
@@ -1330,56 +1391,56 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                     }
                     match &x.kind {
                         // Return points for the given function
-                        TerminatorKind::Return | TerminatorKind::UnwindTerminate(_) | TerminatorKind::UnwindResume | TerminatorKind::CoroutineDrop => {
+                        TerminatorKind::Return /*| TerminatorKind::UnwindTerminate(_) | TerminatorKind::UnwindResume*/ | TerminatorKind::CoroutineDrop => {
                             last_block_in_scope[x.source_info.scope.index()] = bb.into();
                             return_points.push(bb.into());
                         },
 
-                        TerminatorKind::Drop {unwind, ..} | TerminatorKind::Call {unwind, ..} | TerminatorKind::Assert {unwind, ..} | TerminatorKind::FalseUnwind {unwind, ..} | TerminatorKind::InlineAsm {unwind, ..} => {
-                            // Target block of the unwind, we treat it as a successor
-                            match unwind {
-                                UnwindAction::Cleanup(unwind_target) => {
-                                    if x.source_info.scope.index() > (body.basic_blocks[*unwind_target].terminator).clone().unwrap().source_info.scope.index() {
-                                        // for all scopes in the parent chain from current scope to the target scope, update the last block in scope
-                                        let mut current_scope = x.source_info.scope;
-                                        while current_scope.index() > (body.basic_blocks[*unwind_target].terminator).clone().unwrap().source_info.scope.index() {
-                                            last_block_in_scope[current_scope.index()] = bb.into();
-                                            match body.source_scopes[current_scope].parent_scope {
-                                                Some(parent) => {
-                                                    current_scope = parent;
-                                                },
-                                                None => break,
-                                            }
-                                        }
-                                    }
+                        // TerminatorKind::Drop {unwind, ..} | TerminatorKind::Call {unwind, ..} | TerminatorKind::Assert {unwind, ..} | TerminatorKind::FalseUnwind {unwind, ..} | TerminatorKind::InlineAsm {unwind, ..} => {
+                        //     // Target block of the unwind, we treat it as a successor
+                        //     match unwind {
+                        //         UnwindAction::Cleanup(unwind_target) => {
+                        //             if x.source_info.scope.index() > (body.basic_blocks[*unwind_target].terminator).clone().unwrap().source_info.scope.index() {
+                        //                 // for all scopes in the parent chain from current scope to the target scope, update the last block in scope
+                        //                 let mut current_scope = x.source_info.scope;
+                        //                 while current_scope.index() > (body.basic_blocks[*unwind_target].terminator).clone().unwrap().source_info.scope.index() {
+                        //                     last_block_in_scope[current_scope.index()] = bb.into();
+                        //                     match body.source_scopes[current_scope].parent_scope {
+                        //                         Some(parent) => {
+                        //                             current_scope = parent;
+                        //                         },
+                        //                         None => break,
+                        //                     }
+                        //                 }
+                        //             }
                                     
-                                    if x.source_info.scope.index() < (body.basic_blocks[*unwind_target].terminator).clone().unwrap().source_info.scope.index() {
-                                        // check if the target scope is not in the subtree of the children scopes of the current scope, update the last block in scope
-                                        let mut potentially_child_scope = (body.basic_blocks[*unwind_target].terminator).clone().unwrap().source_info.scope;
-                                        while potentially_child_scope.index() > x.source_info.scope.index() {
-                                            if body.source_scopes[potentially_child_scope].parent_scope.unwrap().index() == x.source_info.scope.index() {
-                                                break;
-                                            }
-                                            match body.source_scopes[potentially_child_scope].parent_scope {
-                                                Some(parent) => {
-                                                    potentially_child_scope = parent;
-                                                },
-                                                None => break,
-                                            }
-                                        }
-                                        match body.source_scopes[potentially_child_scope].parent_scope {
-                                            Some(parent) => {
-                                                if parent.index() == x.source_info.scope.index() {
-                                                    last_block_in_scope[x.source_info.scope.index()] = bb.into();
-                                                }
-                                            },
-                                            None => {},
-                                        }
-                                    }
-                                },
-                                _ => {},
-                            }
-                        },
+                        //             if x.source_info.scope.index() < (body.basic_blocks[*unwind_target].terminator).clone().unwrap().source_info.scope.index() {
+                        //                 // check if the target scope is not in the subtree of the children scopes of the current scope, update the last block in scope
+                        //                 let mut potentially_child_scope = (body.basic_blocks[*unwind_target].terminator).clone().unwrap().source_info.scope;
+                        //                 while potentially_child_scope.index() > x.source_info.scope.index() {
+                        //                     if body.source_scopes[potentially_child_scope].parent_scope.unwrap().index() == x.source_info.scope.index() {
+                        //                         break;
+                        //                     }
+                        //                     match body.source_scopes[potentially_child_scope].parent_scope {
+                        //                         Some(parent) => {
+                        //                             potentially_child_scope = parent;
+                        //                         },
+                        //                         None => break,
+                        //                     }
+                        //                 }
+                        //                 match body.source_scopes[potentially_child_scope].parent_scope {
+                        //                     Some(parent) => {
+                        //                         if parent.index() == x.source_info.scope.index() {
+                        //                             last_block_in_scope[x.source_info.scope.index()] = bb.into();
+                        //                         }
+                        //                     },
+                        //                     None => {},
+                        //                 }
+                        //             }
+                        //         },
+                        //         _ => {},
+                        //     }
+                        // },
                         _ => {},
                     }
                 },
@@ -1425,6 +1486,9 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
             }
         }
         
+        println!("Last blocks in each scope: {:?}", last_block_in_scope);
+        println!("last active root refs per scope: {:?}", last_active_root_refs_per_scope);
+        let mut dropped_refs = vec![];
         // Form a set of the blocks that require a drop
         let mut drop_blocks: FxHashSet<BasicBlock> = FxHashSet::default();
         for return_point in return_points.iter() {
@@ -1452,12 +1516,19 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                             }
                             scope
                         };
+                        println!("***********Drop roots: {:?} at scope: {:?}", last_active_root_refs_per_scope[&(scope)].clone(), scope.clone());
                         last_active_root_refs_per_scope[&(scope)].clone()
                     }
                 };
                 let mut expected_terminator = data.terminator.as_ref().unwrap().kind.clone();
                 for root_temp in roots_to_drop.iter() {
-                    println!("******* Performing drop for root with reftemp: {:?}", root_temp);
+                    if dropped_refs.contains(root_temp) {
+                        continue;
+                    }
+                    else {
+                        dropped_refs.push(root_temp.clone());
+                        println!("******* Performing drop for root with reftemp: {:?}, at block: {:?}", root_temp, &bb);
+                    }
                     // The following code injects drop and invalidate for some root allocation local. Right now they are unreachable in the CFG and only go to themselvers.
                     // The target location block is to be decided given the search for termination blocks.
                     let mut root = root_temp.clone();
