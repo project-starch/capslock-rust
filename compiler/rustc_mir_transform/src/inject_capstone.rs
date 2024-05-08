@@ -1325,6 +1325,9 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
 
         let mut scope_children: FxHashMap<usize, Vec<usize>> = FxHashMap::default();
 
+        let mut root_scope: FxHashMap<Local, usize> = FxHashMap::default();
+        let mut last_active_root_refs_per_scope: FxHashMap<usize, Vec<Local>> = FxHashMap::default();
+
         for i in 0..body.source_scopes.len() {
             last_block_in_scope.push(START_BLOCK);
             scope_children.insert(i, vec![]);
@@ -1443,6 +1446,34 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                         // },
                         _ => {},
                     }
+                    for (_i, stmt) in data.statements.clone().iter().enumerate() {
+                        match stmt {
+                            Statement {kind: StatementKind::Assign(box (lhs, ..)), .. } => {
+                                match lhs {
+                                    Place { local, .. } => {
+                                        if alloc_roots.contains(local) {
+                                            root_scope.insert(local.clone(), x.source_info.scope.index());
+                                        }
+                                    },
+                                }
+                            },
+                            _ => (),
+                        }
+                    }
+                    match &data.terminator {
+                        Some(x) => {
+                            match &x.kind {
+                                TerminatorKind::Call { destination, ..} => {
+                                    let local = &(destination.local);
+                                    if alloc_roots.contains(local) {
+                                        root_scope.insert(local.clone(), x.source_info.scope.index());
+                                    }
+                                },
+                                _ => (),
+                            }
+                        },
+                        _ => (),
+                    }
                 },
                 _ => (),
             }
@@ -1451,43 +1482,50 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
         // We now create new restricted sets that track "last active"ness
         // For this we do a DFS on the scopes tree
 
-        let mut visited_scopes = FxHashSet::default();
-        let mut stack = VecDeque::new();
-        stack.push_front(0);
+        // let mut visited_scopes = FxHashSet::default();
+        // let mut stack = VecDeque::new();
+        // stack.push_front(0);
 
-        let mut last_active_root_refs_per_scope: FxHashMap<usize, Vec<Local>> = FxHashMap::default();
+        // while !stack.is_empty() {
+        //     let scope = stack.pop_front().unwrap();
+        //     let children = &scope_children[&scope];
+        //     visited_scopes.insert(scope);
 
-        while !stack.is_empty() {
-            let scope = stack.pop_front().unwrap();
-            let children = &scope_children[&scope];
-            visited_scopes.insert(scope);
+        //     for child in children.iter() {
+        //         if !visited_scopes.contains(&child) {
+        //             stack.push_front(*child);
+        //         }
+        //     }
 
-            for child in children.iter() {
-                if !visited_scopes.contains(&child) {
-                    stack.push_front(*child);
-                }
-            }
+        //     match body.source_scopes[scope.into()].parent_scope {
+        //         Some(parent) => {
+        //             let mut last_active: Vec<Local> = active_root_refs_per_bb[&last_block_in_scope[scope]].clone();
+        //             let parent_active = active_root_refs_per_bb[&last_block_in_scope[parent.index()]].clone();
+        //             for root in parent_active {
+        //                 if last_active.contains(&root) {
+        //                     last_active.remove(last_active.iter().position(|x| *x == root).unwrap());
+        //                 }
+        //             }
+        //             last_active_root_refs_per_scope.insert(scope, last_active.clone());
+        //         },
+        //         None => {
+        //             let last_active: Vec<Local> = active_root_refs_per_bb[&last_block_in_scope[scope]].clone();
+        //             last_active_root_refs_per_scope.insert(scope, last_active.clone());
+        //         }
+        //     }
+        // }
 
-            match body.source_scopes[scope.into()].parent_scope {
-                Some(parent) => {
-                    let mut last_active: Vec<Local> = active_root_refs_per_bb[&last_block_in_scope[scope]].clone();
-                    let parent_active = active_root_refs_per_bb[&last_block_in_scope[parent.index()]].clone();
-                    for root in parent_active {
-                        if last_active.contains(&root) {
-                            last_active.remove(last_active.iter().position(|x| *x == root).unwrap());
-                        }
-                    }
-                    last_active_root_refs_per_scope.insert(scope, last_active.clone());
-                },
-                None => {
-                    let last_active: Vec<Local> = active_root_refs_per_bb[&last_block_in_scope[scope]].clone();
-                    last_active_root_refs_per_scope.insert(scope, last_active.clone());
-                }
-            }
+        for root in alloc_roots.iter() {
+            if !root_scope.contains_key(root) {continue;}
+            let scope = root_scope[root];
+            if !last_active_root_refs_per_scope.contains_key(&scope) {last_active_root_refs_per_scope.insert(scope.clone(), vec![]);}
+            last_active_root_refs_per_scope.get_mut(&scope).unwrap().push(root_temps[root].clone());
         }
         
         println!("Last blocks in each scope: {:?}", last_block_in_scope);
+        println!("last active root refs' scope: {:?}", root_scope);
         println!("last active root refs per scope: {:?}", last_active_root_refs_per_scope);
+
         let mut dropped_refs = vec![];
         // Form a set of the blocks that require a drop
         let mut drop_blocks: FxHashSet<BasicBlock> = FxHashSet::default();
@@ -1495,13 +1533,16 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
             drop_blocks.insert(*return_point);
         }
         for scope in 0..body.source_scopes.len() {
-            if last_active_root_refs_per_scope[(&scope).into()].len() > 0 {
+            if !last_active_root_refs_per_scope.contains_key(&scope) {last_active_root_refs_per_scope.insert(scope.clone(), vec![]);}
+            if last_active_root_refs_per_scope[(&scope).into()].len() > 0 && last_block_in_scope[scope] != START_BLOCK {
                 drop_blocks.insert(last_block_in_scope[scope]);
             }
         }
+        println!("drop blocks: {:?}", drop_blocks);
 
         for (bb, data) in body.basic_blocks_mut().iter_enumerated_mut() {
             if drop_blocks.contains(&bb) {
+                println!("current block during drop: {:?}", &bb);
                 let roots_to_drop = {
                     if return_points.contains(&bb) {
                         active_root_refs_per_bb[&bb].clone()
@@ -1509,7 +1550,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                         let scope: usize = {
                             let mut scope = 0;
                             for (key, value) in last_block_in_scope.iter().enumerate() {
-                                if *value == bb {
+                                if *value == bb && last_active_root_refs_per_scope[(&key).into()].len() > 0 {
                                     scope = key as usize;
                                     break;
                                 }
