@@ -1032,6 +1032,7 @@ impl<'a, 'gcc, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'gcc, 'tcx> {
         } else {
             OperandValue::Ref(place.llval, None, place.align)
         };
+        println!("This is compiled to the GCC backend!!! OperandValue: {:?}", &val);
 
         OperandRef { val, layout: place.layout }
     }

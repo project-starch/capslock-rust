@@ -427,7 +427,7 @@ impl FromStr for Endian {
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "nightly", derive(Encodable_Generic, Decodable_Generic, HashStable_Generic))]
 pub struct Size {
-    raw: u64,
+    pub raw: u64,
 }
 
 // Safety: Ord is implement as just comparing numerical values and numerical values

@@ -20,6 +20,7 @@ use rustc_middle::ty::layout::{
     FnAbiError, FnAbiOfHelpers, FnAbiRequest, LayoutError, LayoutOfHelpers, TyAndLayout,
 };
 use rustc_middle::ty::{self, Ty, TyCtxt};
+use rustc_mir_transform::IS_BOOTSTRAP;
 use rustc_span::Span;
 use rustc_symbol_mangling::typeid::{kcfi_typeid_for_fnabi, typeid_for_fnabi, TypeIdOptions};
 use rustc_target::abi::{self, call::FnAbi, Align, Size, WrappingRange};
@@ -29,6 +30,8 @@ use std::borrow::Cow;
 use std::iter;
 use std::ops::Deref;
 use std::ptr;
+
+static mut SCALED_REF:Vec<usize> = vec![];
 
 // All Builders must have an llfn associated with them
 #[must_use]
@@ -572,7 +575,21 @@ impl<'a, 'll, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'll, 'tcx> {
             }
         }
 
+        let place_layout = place.layout.clone();
+        let size_raw_ref = &place_layout.layout.0.0.size.raw;
+        let size_addr = size_raw_ref as *const u64 as usize;
+        let size_addr_1 = size_addr + 1;
+        let size_addr_2 = size_addr_1 - 1;
+        let size_ref = size_addr_2 as *mut u64;
+
         let val = if let Some(llextra) = place.llextra {
+            unsafe {
+                if /* !SCALED_REF.contains(&size_addr_2) && */ !IS_BOOTSTRAP { 
+                    *size_ref = place.layout.layout.0.0.size.bytes() + 16;
+                    SCALED_REF.push(size_addr_2.clone());
+                } 
+            }
+            println!("This is compiled to the LLVM backend!!! OperandValue: {:?}, and layout: {:?}", &OperandValue::Ref(place.llval, Some(llextra), place.align), &place.layout.layout.0.0.size);
             OperandValue::Ref(place.llval, Some(llextra), place.align)
         } else if place.layout.is_llvm_immediate() {
             let mut const_llval = None;
@@ -616,10 +633,17 @@ impl<'a, 'll, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'll, 'tcx> {
                 load(1, b, place.layout, place.align.restrict_for_offset(b_offset), b_offset),
             )
         } else {
+            unsafe {
+                if /* !SCALED_REF.contains(&size_addr_2) && */ !IS_BOOTSTRAP { 
+                    *size_ref = place.layout.layout.0.0.size.bytes() + 16;
+                    SCALED_REF.push(size_addr_2.clone());
+                }
+            }
+            println!("This is compiled to the LLVM backend!!! OperandValue: {:?}, and layout: {:?}", &OperandValue::Ref(place.llval, None, place.align), &place.layout.layout.0.0.size);
             OperandValue::Ref(place.llval, None, place.align)
         };
 
-        OperandRef { val, layout: place.layout }
+        OperandRef { val, layout: place_layout }
     }
 
     fn write_operand_repeatedly(
