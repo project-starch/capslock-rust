@@ -17,6 +17,8 @@ pub struct PlaceRef<'tcx, V> {
     /// A pointer to the contents of the place.
     pub llval: V,
 
+    pub capab: u128,
+
     /// This place's extra data if it is unsized, or `None` if null.
     pub llextra: Option<V>,
 
@@ -30,7 +32,7 @@ pub struct PlaceRef<'tcx, V> {
 impl<'a, 'tcx, V: CodegenObject> PlaceRef<'tcx, V> {
     pub fn new_sized(llval: V, layout: TyAndLayout<'tcx>) -> PlaceRef<'tcx, V> {
         assert!(layout.is_sized());
-        PlaceRef { llval, llextra: None, layout, align: layout.align.abi }
+        PlaceRef { llval, capab: 0, llextra: None, layout, align: layout.align.abi }
     }
 
     pub fn new_sized_aligned(
@@ -39,7 +41,7 @@ impl<'a, 'tcx, V: CodegenObject> PlaceRef<'tcx, V> {
         align: Align,
     ) -> PlaceRef<'tcx, V> {
         assert!(layout.is_sized());
-        PlaceRef { llval, llextra: None, layout, align }
+        PlaceRef { llval, capab: 0, llextra: None, layout, align }
     }
 
     // FIXME(eddyb) pass something else for the name so no work is done
@@ -109,6 +111,7 @@ impl<'a, 'tcx, V: CodegenObject> PlaceRef<'tcx, V> {
             };
             PlaceRef {
                 llval,
+                capab: 0,
                 llextra: if bx.cx().type_has_metadata(field.ty) { self.llextra } else { None },
                 layout: field,
                 align: effective_field_align,
@@ -166,7 +169,7 @@ impl<'a, 'tcx, V: CodegenObject> PlaceRef<'tcx, V> {
         // Adjust pointer.
         let ptr = bx.inbounds_ptradd(self.llval, offset);
 
-        PlaceRef { llval: ptr, llextra: self.llextra, layout: field, align: effective_field_align }
+        PlaceRef { llval: ptr, capab: 0, llextra: self.llextra, layout: field, align: effective_field_align }
     }
 
     /// Obtain the actual discriminant of a value.
@@ -362,6 +365,7 @@ impl<'a, 'tcx, V: CodegenObject> PlaceRef<'tcx, V> {
                 self.llval,
                 &[bx.cx().const_usize(0), llindex],
             ),
+            capab: 0,
             llextra: None,
             layout,
             align: self.align.restrict_for_offset(offset),

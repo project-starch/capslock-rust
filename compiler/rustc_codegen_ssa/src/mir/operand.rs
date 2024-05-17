@@ -222,7 +222,7 @@ impl<'a, 'tcx, V: CodegenObject> OperandRef<'tcx, V> {
             OperandValue::ZeroSized => bug!("Deref of ZST operand {:?}", self),
         };
         let layout = cx.layout_of(projected_ty);
-        PlaceRef { llval: llptr, llextra, layout, align: layout.align.abi }
+        PlaceRef { llval: llptr, capab: 0, llextra, layout, align: layout.align.abi }
     }
 
     /// If this operand is a `Pair`, we return an aggregate with the two values.

@@ -113,7 +113,7 @@ fn record_place_derefences(alloc_roots: &Vec<Local>, root_references: &mut FxHas
                 //     past_cast_indices.push(LocalOrUsizeEnum::Usize(constant_projection_index(proj)));
                 // }
                 past_cast_indices.push(get_record_proj_elem(proj, place.local.clone()));
-                println!("For local: {:?}, After proj: {:?}, past_cast_indices: {:?}", lhs.local.clone(), proj, past_cast_indices);
+                // println!("For local: {:?}, After proj: {:?}, past_cast_indices: {:?}", lhs.local.clone(), proj, past_cast_indices);
             }
             root_references.get_mut(&place.local).unwrap().insert(lhs.local.clone(), (deref_depth, vec![(create_ref, place as *const Place<'_> as usize)], past_cast_indices));
         }
@@ -137,7 +137,7 @@ fn record_place_derefences(alloc_roots: &Vec<Local>, root_references: &mut FxHas
                         //     past_cast_indices.push(LocalOrUsizeEnum::Usize(constant_projection_index(proj)));
                         // }
                         past_cast_indices.push(get_record_proj_elem(proj, place.local.clone()));
-                        println!("For local: {:?}, After proj: {:?}, past_cast_indices: {:?}", lhs.local.clone(), proj, past_cast_indices);
+                        // println!("For local: {:?}, After proj: {:?}, past_cast_indices: {:?}", lhs.local.clone(), proj, past_cast_indices);
                     }
                     root_references.get_mut(root).unwrap().insert(lhs.local.clone(), (deref_depth, vec![(create_ref, place as *const Place<'_> as usize)], past_cast_indices));
                 }
@@ -597,7 +597,7 @@ fn inject_deref<'tcx> (
             kind: StatementKind::Assign(Box::new((usize_temp_2.into(), Rvalue::Use(Operand::Constant(Box::new(ConstOperand { span: SPANS[0], user_ty: None, const_: Const::from_scalar(tcx, Scalar::Int(ScalarInt::from(total_offset as u64)), Ty::new(tcx, ty::Uint(ty::UintTy::Usize))) })))))),
         };
         data.statements.push(new_stmt_offset.clone());
-        println!("***********local type: {:?}, local size: {:?}, total offset: {:?}, root: {:?}", local_type, local_size, total_offset, root);
+        // println!("***********local type: {:?}, local size: {:?}, total offset: {:?}, root: {:?}", local_type, local_size, total_offset, root);
 
         let deref_terminator = call_index_mut_bound(tcx, *root, root_temp_refs.clone(), usize_temp, &generics_list, usize_temp_2, _empty_tuple_temp, deref_block, data.is_cleanup.clone(), rapture_crate_number);
         let size_calc_block = patch.new_block(BasicBlockData {
@@ -672,7 +672,7 @@ pub enum LocalOrUsizeEnum {
 fn get_record_proj_elem<T>(projection: ProjectionElem<Local, T>, local: Local) -> LocalOrUsizeEnum {
     match projection {
         ProjectionElem::Field(fieldindex, _ty) => {
-            println!("*******************TUPLE FIELD INDEX: {:?}", fieldindex);
+            // println!("*******************TUPLE FIELD INDEX: {:?}", fieldindex);
             LocalOrUsizeEnum::TypedOffset(usize::from(fieldindex), local.clone())
         },
         ProjectionElem::ConstantIndex {offset, min_length, from_end} => {
@@ -867,8 +867,8 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
             }
         }
 
-        println!("***********************found roots: {:?}", alloc_roots);
-        println!("***********************tracked tmps: {:?}", tracked_locals);
+        // println!("***********************found roots: {:?}", alloc_roots);
+        // println!("***********************tracked tmps: {:?}", tracked_locals);
 
         // Creating a fixed number of temporary variables of fixed type to be used by our injected functions
         let usize_temp_type = Ty::new(tcx, ty::Uint(UintTy::Usize));
@@ -1157,7 +1157,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
 
                                     let g_root = root_generics[&local];
                                     let generics_list = [g_root];
-                                    println!("****lhs {:?}, temp: {:?}", &local, &root_temps[&local]);
+                                    // println!("****lhs {:?}, temp: {:?}", &local, &root_temps[&local]);
 
                                     let from_ref_terminator = call_from_ref(tcx, *local, root_temps.clone(), root_refs.clone(), &generics_list, from_ref_block, data.is_cleanup.clone(), rapture_crate_number);
 
@@ -1217,7 +1217,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
 
                                 let from_ref_terminator = call_from_ref(tcx, local, root_temps.clone(), root_refs.clone(), &generics_list, target.unwrap(), data.is_cleanup.clone(), rapture_crate_number);
 
-                                println!("****lhs {:?}, temp: {:?}", &local, &root_temps[&local]);
+                                // println!("****lhs {:?}, temp: {:?}", &local, &root_temps[&local]);
                                 // The current basic block's terminator is now replaced with the one we just created (which shifts the control flow to the intermediary block)
                                 patch.patch_terminator(bb, new_terminator);
                                 patch.patch_terminator(from_ref_block, from_ref_terminator);
@@ -1522,9 +1522,9 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
             last_active_root_refs_per_scope.get_mut(&scope).unwrap().push(root_temps[root].clone());
         }
         
-        println!("Last blocks in each scope: {:?}", last_block_in_scope);
-        println!("last active root refs' scope: {:?}", root_scope);
-        println!("last active root refs per scope: {:?}", last_active_root_refs_per_scope);
+        // println!("Last blocks in each scope: {:?}", last_block_in_scope);
+        // println!("last active root refs' scope: {:?}", root_scope);
+        // println!("last active root refs per scope: {:?}", last_active_root_refs_per_scope);
 
         let mut dropped_refs = vec![];
         // Form a set of the blocks that require a drop
@@ -1538,11 +1538,11 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                 drop_blocks.insert(last_block_in_scope[scope]);
             }
         }
-        println!("drop blocks: {:?}", drop_blocks);
+        // println!("drop blocks: {:?}", drop_blocks);
 
         for (bb, data) in body.basic_blocks_mut().iter_enumerated_mut() {
             if drop_blocks.contains(&bb) {
-                println!("current block during drop: {:?}", &bb);
+                // println!("current block during drop: {:?}", &bb);
                 let roots_to_drop = {
                     if return_points.contains(&bb) {
                         active_root_refs_per_bb[&bb].clone()
@@ -1557,7 +1557,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                             }
                             scope
                         };
-                        println!("***********Drop roots: {:?} at scope: {:?}", last_active_root_refs_per_scope[&(scope)].clone(), scope.clone());
+                        // println!("***********Drop roots: {:?} at scope: {:?}", last_active_root_refs_per_scope[&(scope)].clone(), scope.clone());
                         last_active_root_refs_per_scope[&(scope)].clone()
                     }
                 };
@@ -1568,7 +1568,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                     }
                     else {
                         dropped_refs.push(root_temp.clone());
-                        println!("******* Performing drop for root with reftemp: {:?}, at block: {:?}", root_temp, &bb);
+                        // println!("******* Performing drop for root with reftemp: {:?}, at block: {:?}", root_temp, &bb);
                     }
                     // The following code injects drop and invalidate for some root allocation local. Right now they are unreachable in the CFG and only go to themselvers.
                     // The target location block is to be decided given the search for termination blocks.
