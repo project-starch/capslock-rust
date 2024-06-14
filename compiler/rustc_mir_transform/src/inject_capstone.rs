@@ -12,10 +12,10 @@ use crate::MirPass;
 // use rustc_middle::mir::visit::MutVisitor;
 use rustc_middle::mir::patch::MirPatch;
 use crate::ty::Ty;
-use crate::{IndexVec, Spanned};
+use crate::{Spanned};
 // use rustc_middle::mir::HasLocalDecls;
 // use rustc_middle::mir::{dump_mir, PassWhere};
-use rustc_index::IndexSlice;
+use rustc_index::{IndexVec, IndexSlice};
 use rustc_middle::mir::*;
 use rustc_middle::mir::visit::MutVisitor;
 // use rustc_middle::mir::interpret::Scalar;
@@ -877,15 +877,212 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
         for (bb, data) in body.basic_blocks_mut().iter_enumerated_mut() {
             for (i, stmt) in data.statements.clone().iter().enumerate().rev() {
                 match stmt {
-                    Statement { kind: StatementKind::Assign(box (lhs, _rhs)), .. } => {
+                    Statement { kind: StatementKind::Assign(box (lhs, rhs)), .. } => {
                         let lhs_type = local_decls_clone[lhs.local].ty;
+                        
                         // Check whether the LHS is a pointer
-                        match lhs_type.kind() {
-                            ty::RawPtr(_) => {
-                                println!("Pointer found {:?} of type {:?}", lhs.local, lhs_type);
+                        // match lhs_type.kind() {
+                        //     // ty::RawPtr(_) => {
+                        //     //     println!("Pointer found {:?} of type {:?}", lhs.local, lhs_type);
+                        //     //     // This is the point where we will inject one function call to create_capab, passing in the pointer (that we just found) as an argument
+
+                        //     //     // Shift all the statements beyond our target statement to a new vector and clear them from the original block
+                        //     //     let mut new_stmts = vec![];
+                        //     //     for (j, stmt) in data.statements.iter_mut().enumerate() {
+                        //     //         if j > i { 
+                        //     //             new_stmts.push(stmt.clone());
+                        //     //             stmt.make_nop();
+                        //     //         }
+                        //     //     }
+
+                        //     //     // Create an intermediary block that will be inserted between the current block and the next block
+                        //     //     let create_capab_block;
+
+                        //     //     // This block has to point to the next block in the control flow graph (that terminator is an Option type)
+                        //     //     create_capab_block = patch.new_block(BasicBlockData {
+                        //     //         statements: new_stmts.clone(),
+                        //     //         terminator: Some(data.terminator.as_ref().unwrap().clone()),
+                        //     //         is_cleanup: data.is_cleanup.clone(),
+                        //     //     });
+
+                        //     //     let crate_num = CrateNum::new(rapture_crate_number);
+                        //     //     let def_index = DefIndex::from_usize(0);
+                        //     //     let mut _def_id = DefId { krate: crate_num, index: def_index };
+                        //     //     let mut _def_id_int = 0;
+                        //     //     let mut name = tcx.def_path_str(_def_id);
+                                
+                        //     //     while name != "create_capab_from_ptr" {
+                        //     //         _def_id_int += 1;
+                        //     //         _def_id = DefId { krate: CrateNum::new(rapture_crate_number), index: DefIndex::from_usize(_def_id_int) };
+                        //     //         name = tcx.def_path_str(_def_id);
+                        //     //     }
+                        //     //     if name != "create_capab_from_ptr" {
+                        //     //         println!("%$%$%$%$% Corrupted RaptureCell function definition: {}", name);
+                        //     //     }
+
+                        //     //     let root_ty = lhs_type;
+                        //     //     let generic_arg = GenericArg::from(root_ty);
+                        //     //     let generic_args = tcx.mk_args(&[generic_arg]);
+
+                        //     //     // Creating the sugar of all the structures for the function type to be injected
+                        //     //     let ty_ = Ty::new(tcx, ty::FnDef(_def_id, generic_args));
+                        //     //     let const_ = Const::Val(ConstValue::ZeroSized, ty_);
+                        //     //     let const_operand = Box::new(ConstOperand { span: SPANS[0], user_ty: None, const_: const_ });
+                        //     //     let operand_ = Operand::Constant(const_operand);
+
+                        //     //     println!("Operand: {:?}", operand_);
+
+                        //     //     let dest_place = Place {local: (lhs.local).into(), projection: List::empty()};
+
+                        //     //     // This is how we create the arguments to be passed to the function that we are calling
+                        //     //     let operand_input = Operand::Copy(Place {local: lhs.local, projection: List::empty()});
+                        //     //     let spanned_operand = Spanned { span: SPANS[0], node: operand_input };
+
+                        //     //     let unwind_action: UnwindAction;
+                        //     //     if data.is_cleanup {
+                        //     //         unwind_action = UnwindAction::Terminate(UnwindTerminateReason::InCleanup);
+                        //     //     }
+                        //     //     else {
+                        //     //         unwind_action = UnwindAction::Continue;
+                        //     //     }
+                        //     //     // Create a block terminator that will execute the function call we want to inject
+                        //     //     let _intermediary_terminator = TerminatorKind::Call {
+                        //     //         func: operand_,
+                        //     //         args: vec![spanned_operand],
+                        //     //         destination: dest_place,
+                        //     //         target: Some(create_capab_block),
+                        //     //         unwind: unwind_action,
+                        //     //         call_source: CallSource::Normal,
+                        //     //         fn_span: SPANS[0],
+                        //     //     };
+
+                        //     //     // patch.patch_terminator(bb, intermediary_terminator);
+                        //     //     break;
+                        //     // },
+                        //     ty::Ref(..) => {
+                        //         println!("LHS here. Reference found {:?} of type {:?}", lhs.local, lhs_type);
+                        //         // // This is the point where we will inject one function call to create_capab, passing in the pointer (that we just found) as an argument
+
+                        //         // // Shift all the statements beyond our target statement to a new vector and clear them from the original block
+                        //         // let mut new_stmts = vec![];
+                        //         // for (j, stmt) in data.statements.iter_mut().enumerate() {
+                        //         //     if j > i { 
+                        //         //         new_stmts.push(stmt.clone());
+                        //         //         stmt.make_nop();
+                        //         //     }
+                        //         // }
+
+                        //         // // Create an intermediary block that will be inserted between the current block and the next block
+                        //         // let create_capab_block;
+
+                        //         // // This block has to point to the next block in the control flow graph (that terminator is an Option type)
+                        //         // create_capab_block = patch.new_block(BasicBlockData {
+                        //         //     statements: new_stmts.clone(),
+                        //         //     terminator: Some(data.terminator.as_ref().unwrap().clone()),
+                        //         //     is_cleanup: data.is_cleanup.clone(),
+                        //         // });
+
+                        //         // let crate_num = CrateNum::new(rapture_crate_number);
+                        //         // let def_index = DefIndex::from_usize(0);
+                        //         // let mut _def_id = DefId { krate: crate_num, index: def_index };
+                        //         // let mut _def_id_int = 0;
+                        //         // let mut name = tcx.def_path_str(_def_id);
+                                
+                        //         // while name != "create_capab_from_ref" {
+                        //         //     _def_id_int += 1;
+                        //         //     _def_id = DefId { krate: CrateNum::new(rapture_crate_number), index: DefIndex::from_usize(_def_id_int) };
+                        //         //     name = tcx.def_path_str(_def_id);
+                        //         // }
+                        //         // if name != "create_capab_from_ref" {
+                        //         //     println!("%$%$%$%$% Corrupted RaptureCell function definition: {}", name);
+                        //         // }
+
+                        //         // let root_ty = lhs_type;
+                        //         // let generic_arg = GenericArg::from(root_ty);
+                        //         // let generic_args = tcx.mk_args(&[generic_arg]);
+
+                        //         // // Creating the sugar of all the structures for the function type to be injected
+                        //         // let ty_ = Ty::new(tcx, ty::FnDef(_def_id, generic_args));
+                        //         // let const_ = Const::Val(ConstValue::ZeroSized, ty_);
+                        //         // let const_operand = Box::new(ConstOperand { span: SPANS[0], user_ty: None, const_: const_ });
+                        //         // let operand_ = Operand::Constant(const_operand);
+
+                        //         // println!("Operand: {:?}", operand_);
+
+                        //         // let dest_place = Place {local: (lhs.local).into(), projection: List::empty()};
+
+                        //         // // This is how we create the arguments to be passed to the function that we are calling
+                        //         // let operand_input = Operand::Copy(Place {local: lhs.local, projection: List::empty()});
+                        //         // let spanned_operand = Spanned { span: SPANS[0], node: operand_input };
+
+                        //         // println!("Spanned Operand: {:?}", spanned_operand);
+
+                        //         // let unwind_action: UnwindAction;
+                        //         // if data.is_cleanup {
+                        //         //     unwind_action = UnwindAction::Terminate(UnwindTerminateReason::InCleanup);
+                        //         // }
+                        //         // else {
+                        //         //     unwind_action = UnwindAction::Continue;
+                        //         // }
+                        //         // // Create a block terminator that will execute the function call we want to inject
+                        //         // let intermediary_terminator = TerminatorKind::Call {
+                        //         //     func: operand_,
+                        //         //     args: vec![spanned_operand],
+                        //         //     destination: dest_place,
+                        //         //     target: Some(create_capab_block),
+                        //         //     unwind: unwind_action,
+                        //         //     call_source: CallSource::Normal,
+                        //         //     fn_span: SPANS[0],
+                        //         // };
+
+                        //         // patch.patch_terminator(bb, intermediary_terminator);
+                        //         // break;
+                        //     },
+                        //     _ => (),
+                        // }
+
+                        println!("\nGeneric RHS: {:?}", rhs);
+                        match rhs {
+                            // Candidates: Cast, Ref, AdressOf. And technically Use as well, but that's just moving the same pointer around.
+                            Rvalue::AddressOf(mutability, place) => {
+                                println!("RHS here. AddressOf found {:?} of type {:?}. The rhs place is {:?} with mutability {:?}", lhs.local, lhs_type, place, mutability);
+                            },
+                            Rvalue::Use(operand) => {
+                                println!("RHS here. Use found {:?} of type {:?}. The rhs operand is {:?}", lhs.local, lhs_type, operand);
+                            },
+                            Rvalue::Repeat(operand, ..) => {
+                                println!("RHS here. Repeat found {:?} of type {:?}. The rhs operand is {:?}", lhs.local, lhs_type, operand);
+                            },
+                            Rvalue::ThreadLocalRef(defid) => {
+                                println!("RHS here. ThreadLocalRef found {:?} of type {:?}. The rhs defid is {:?}", lhs.local, lhs_type, defid);
+                            },
+                            Rvalue::Len(place) => {
+                                println!("RHS here. Len found {:?} of type {:?}. The rhs place is {:?}", lhs.local, lhs_type, place);
+                            },
+                            Rvalue::BinaryOp(_binop, operands) => {
+                                println!("RHS here. BinaryOp found {:?} of type {:?}. The rhs operands are {:?}", lhs.local, lhs_type, operands);
+                            },
+                            Rvalue::CheckedBinaryOp(_binop, operands) => {
+                                println!("RHS here. CheckedBinaryOp found {:?} of type {:?}. The rhs operands are {:?}", lhs.local, lhs_type, operands);
+                            },
+                            Rvalue::Aggregate(_aggregate, operands) => {
+                                println!("RHS here. Aggregate found {:?} of type {:?}. The rhs operands are {:?}", lhs.local, lhs_type, operands);
+                            },
+                            Rvalue::ShallowInitBox(operand, ..) => {
+                                println!("RHS here. ShallowInitBox found {:?} of type {:?}. The rhs operand is {:?}", lhs.local, lhs_type, operand);
+                            },
+                            Rvalue::Discriminant(place) => {
+                                println!("RHS here. Discriminant found {:?} of type {:?}. The rhs place is {:?}", lhs.local, lhs_type, place);
+                            },
+                            Rvalue::NullaryOp(op, ..) => {
+                                println!("RHS here. NullaryOp found {:?} of type {:?}. The rhs operand is {:?}", lhs.local, lhs_type, op);
+                            },
+                            Rvalue::UnaryOp(unop, ..) => {
+                                println!("RHS here. UnaryOp found {:?} of type {:?}. The rhs operand is {:?}", lhs.local, lhs_type, unop);
+                            },
+                            Rvalue::Ref(.., place) => {
+                                println!("RHS here. Reference found {:?} of type {:?}. The rhs place is {:?}", lhs.local, lhs_type, place);
                                 // This is the point where we will inject one function call to create_capab, passing in the pointer (that we just found) as an argument
-                                // We also have to create a local for every pointer that we find, to store the return value of create_capab
-                                // That local will be assigned to the pointer variable, and used thenceforth
 
                                 // Shift all the statements beyond our target statement to a new vector and clear them from the original block
                                 let mut new_stmts = vec![];
@@ -912,16 +1109,14 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                 let mut _def_id_int = 0;
                                 let mut name = tcx.def_path_str(_def_id);
                                 
-                                while name != "create_capab" {
+                                while name != "create_capab_from_ref" {
                                     _def_id_int += 1;
                                     _def_id = DefId { krate: CrateNum::new(rapture_crate_number), index: DefIndex::from_usize(_def_id_int) };
                                     name = tcx.def_path_str(_def_id);
                                 }
-                                if name != "create_capab" {
+                                if name != "create_capab_from_ref" {
                                     println!("%$%$%$%$% Corrupted RaptureCell function definition: {}", name);
                                 }
-
-                                println!("Function found: {:?}", _def_id);
 
                                 let root_ty = lhs_type;
                                 let generic_arg = GenericArg::from(root_ty);
@@ -940,6 +1135,8 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                 // This is how we create the arguments to be passed to the function that we are calling
                                 let operand_input = Operand::Copy(Place {local: lhs.local, projection: List::empty()});
                                 let spanned_operand = Spanned { span: SPANS[0], node: operand_input };
+
+                                println!("Spanned Operand: {:?}", spanned_operand);
 
                                 let unwind_action: UnwindAction;
                                 if data.is_cleanup {
@@ -961,6 +1158,264 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
 
                                 patch.patch_terminator(bb, intermediary_terminator);
                                 break;
+                            },
+                            _ => (),
+                        }
+                    }
+                    _ => (),
+                }
+            }
+        }
+
+        patch.apply(body);
+        patch = MirPatch::new(body);
+
+        println!("\n\n\tSecond pass.\n\n");
+
+        for (bb, data) in body.basic_blocks_mut().iter_enumerated_mut() {
+            for (i, stmt) in data.statements.clone().iter().enumerate().rev() {
+                match stmt {
+                    Statement { kind: StatementKind::Assign(box (lhs, rhs)), .. } => {
+                        let lhs_type = local_decls_clone[lhs.local].ty;
+
+                        println!("\nGeneric RHS: {:?}", rhs);
+                        match rhs {
+                            // Candidates: Cast, Ref, AdressOf. And technically Use as well, but that's just moving the same pointer around.
+                            Rvalue::AddressOf(mutability, place) => {
+                                println!("RHS here. AddressOf found {:?} of type {:?}. The rhs place is {:?} with mutability {:?}", lhs.local, lhs_type, place, mutability);
+                                let mut new_stmts = vec![];
+                                for (j, stmt) in data.statements.iter_mut().enumerate() {
+                                    if j > i { 
+                                        new_stmts.push(stmt.clone());
+                                        stmt.make_nop();
+                                    }
+                                }
+
+                                // Create an intermediary block that will be inserted between the current block and the next block
+                                let create_capab_block;
+
+                                // This block has to point to the next block in the control flow graph (that terminator is an Option type)
+                                create_capab_block = patch.new_block(BasicBlockData {
+                                    statements: new_stmts.clone(),
+                                    terminator: Some(data.terminator.as_ref().unwrap().clone()),
+                                    is_cleanup: data.is_cleanup.clone(),
+                                });
+
+                                let crate_num = CrateNum::new(rapture_crate_number);
+                                let def_index = DefIndex::from_usize(0);
+                                let mut _def_id = DefId { krate: crate_num, index: def_index };
+                                let mut _def_id_int = 0;
+                                let mut name = tcx.def_path_str(_def_id);
+
+                                // Check whether the thing being borrowed was mutable
+                                // let is_mut;
+                                // match mutability {
+                                //     Mutability::Mut => {
+                                //         is_mut = true;
+                                //     },
+                                //     Mutability::Not => {
+                                //         is_mut = false;
+                                //     },
+                                // }
+
+                                let function_name = "create_capab_from_ptr";
+                                
+                                // if is_mut {
+                                //     function_name = "rapture::borrow_mut";
+                                // }
+                                // else {
+                                //     function_name = "rapture::borrow";
+                                // }
+                                
+                                while name != function_name {
+                                    _def_id_int += 1;
+                                    _def_id = DefId { krate: CrateNum::new(rapture_crate_number), index: DefIndex::from_usize(_def_id_int) };
+                                    name = tcx.def_path_str(_def_id);
+                                }
+                                if name != function_name {
+                                    println!("%$%$%$%$% Corrupted RaptureCell function definition: {}", name);
+                                }
+
+                                let root_ty = lhs_type;
+                                let generic_arg = GenericArg::from(root_ty);
+                                let generic_args = tcx.mk_args(&[generic_arg]);
+
+                                // Creating the sugar of all the structures for the function type to be injected
+                                let ty_ = Ty::new(tcx, ty::FnDef(_def_id, generic_args));
+                                let const_ = Const::Val(ConstValue::ZeroSized, ty_);
+                                let const_operand = Box::new(ConstOperand { span: SPANS[0], user_ty: None, const_: const_ });
+                                let operand_ = Operand::Constant(const_operand);
+
+                                println!("Operand: {:?}", operand_);
+
+                                let dest_place = Place {local: (lhs.local).into(), projection: List::empty()};
+
+                                // This is how we create the arguments to be passed to the function that we are calling
+                                let operand_input = Operand::Copy(Place {local: lhs.local, projection: List::empty()});
+                                let spanned_operand = Spanned { span: SPANS[0], node: operand_input };
+
+                                println!("Spanned Operand: {:?}", spanned_operand);
+
+                                let unwind_action: UnwindAction;
+                                if data.is_cleanup {
+                                    unwind_action = UnwindAction::Terminate(UnwindTerminateReason::InCleanup);
+                                }
+                                else {
+                                    unwind_action = UnwindAction::Continue;
+                                }
+                                // Create a block terminator that will execute the function call we want to inject
+                                let intermediary_terminator = TerminatorKind::Call {
+                                    func: operand_,
+                                    args: vec![spanned_operand],
+                                    destination: dest_place,
+                                    target: Some(create_capab_block),
+                                    unwind: unwind_action,
+                                    call_source: CallSource::Normal,
+                                    fn_span: SPANS[0],
+                                };
+
+                                patch.patch_terminator(bb, intermediary_terminator);
+                                break;
+                            },
+                            Rvalue::Use(operand) => {
+                                println!("RHS here. Use found {:?} of type {:?}. The rhs operand is {:?}", lhs.local, lhs_type, operand);
+                            },
+                            Rvalue::Repeat(operand, ..) => {
+                                println!("RHS here. Repeat found {:?} of type {:?}. The rhs operand is {:?}", lhs.local, lhs_type, operand);
+                            },
+                            Rvalue::ThreadLocalRef(defid) => {
+                                println!("RHS here. ThreadLocalRef found {:?} of type {:?}. The rhs defid is {:?}", lhs.local, lhs_type, defid);
+                            },
+                            Rvalue::Len(place) => {
+                                println!("RHS here. Len found {:?} of type {:?}. The rhs place is {:?}", lhs.local, lhs_type, place);
+                            },
+                            Rvalue::BinaryOp(_binop, operands) => {
+                                println!("RHS here. BinaryOp found {:?} of type {:?}. The rhs operands are {:?}", lhs.local, lhs_type, operands);
+                            },
+                            Rvalue::CheckedBinaryOp(_binop, operands) => {
+                                println!("RHS here. CheckedBinaryOp found {:?} of type {:?}. The rhs operands are {:?}", lhs.local, lhs_type, operands);
+                            },
+                            Rvalue::Aggregate(_aggregate, operands) => {
+                                println!("RHS here. Aggregate found {:?} of type {:?}. The rhs operands are {:?}", lhs.local, lhs_type, operands);
+                            },
+                            Rvalue::ShallowInitBox(operand, ..) => {
+                                println!("RHS here. ShallowInitBox found {:?} of type {:?}. The rhs operand is {:?}", lhs.local, lhs_type, operand);
+                            },
+                            Rvalue::Discriminant(place) => {
+                                println!("RHS here. Discriminant found {:?} of type {:?}. The rhs place is {:?}", lhs.local, lhs_type, place);
+                            },
+                            Rvalue::NullaryOp(op, ..) => {
+                                println!("RHS here. NullaryOp found {:?} of type {:?}. The rhs operand is {:?}", lhs.local, lhs_type, op);
+                            },
+                            Rvalue::UnaryOp(unop, ..) => {
+                                println!("RHS here. UnaryOp found {:?} of type {:?}. The rhs operand is {:?}", lhs.local, lhs_type, unop);
+                            },
+                            Rvalue::Ref(.., place) => {
+                                println!("RHS here. Reference found {:?} of type {:?}. The rhs place is {:?}", lhs.local, lhs_type, place);
+                            },
+                            Rvalue::Cast(cast_kind, operand, ..) => {
+                                println!("Cast found of kind {:?} with operand {:?}", cast_kind, operand);
+                                match cast_kind {
+                                    CastKind::PtrToPtr => {
+                                        // Shift all the statements beyond our target statement to a new vector and clear them from the original block
+                                        let mut new_stmts = vec![];
+                                        for (j, stmt) in data.statements.iter_mut().enumerate() {
+                                            if j > i { 
+                                                new_stmts.push(stmt.clone());
+                                                stmt.make_nop();
+                                            }
+                                        }
+
+                                        // Create an intermediary block that will be inserted between the current block and the next block
+                                        let create_capab_block;
+
+                                        // This block has to point to the next block in the control flow graph (that terminator is an Option type)
+                                        create_capab_block = patch.new_block(BasicBlockData {
+                                            statements: new_stmts.clone(),
+                                            terminator: Some(data.terminator.as_ref().unwrap().clone()),
+                                            is_cleanup: data.is_cleanup.clone(),
+                                        });
+
+                                        let crate_num = CrateNum::new(rapture_crate_number);
+                                        let def_index = DefIndex::from_usize(0);
+                                        let mut _def_id = DefId { krate: crate_num, index: def_index };
+                                        let mut _def_id_int = 0;
+                                        let mut name = tcx.def_path_str(_def_id);
+
+                                        let function_name;
+
+                                        // check if the lhs is a mutable type
+                                        let mut is_mutable = false;
+                                        match lhs_type.kind() {
+                                            ty::Ref(_, _, mutability) => {
+                                                if *mutability == rustc_middle::ty::Mutability::Mut {
+                                                    is_mutable = true;
+                                                }
+                                            },
+                                            _ => (),
+                                        }
+
+                                        if is_mutable {
+                                            function_name = "rapture::borrow_mut";
+                                        }
+                                        else {
+                                            function_name = "rapture::borrow";
+                                        }
+
+                                        println!("Function name: {}", function_name);
+                                        
+                                        while name != function_name {
+                                            _def_id_int += 1;
+                                            _def_id = DefId { krate: CrateNum::new(rapture_crate_number), index: DefIndex::from_usize(_def_id_int) };
+                                            name = tcx.def_path_str(_def_id);
+                                        }
+                                        if name != function_name {
+                                            println!("%$%$%$%$% Corrupted RaptureCell function definition: {}", name);
+                                        }
+
+                                        let root_ty = lhs_type;
+                                        let generic_arg = GenericArg::from(root_ty);
+                                        let generic_args = tcx.mk_args(&[generic_arg]);
+
+                                        // Creating the sugar of all the structures for the function type to be injected
+                                        let ty_ = Ty::new(tcx, ty::FnDef(_def_id, generic_args));
+                                        let const_ = Const::Val(ConstValue::ZeroSized, ty_);
+                                        let const_operand = Box::new(ConstOperand { span: SPANS[0], user_ty: None, const_: const_ });
+                                        let operand_ = Operand::Constant(const_operand);
+
+                                        println!("Operand: {:?}", operand_);
+
+                                        let dest_place = Place {local: (lhs.local).into(), projection: List::empty()};
+
+                                        // This is how we create the arguments to be passed to the function that we are calling
+                                        let operand_input = Operand::Copy(Place {local: lhs.local, projection: List::empty()});
+                                        let spanned_operand = Spanned { span: SPANS[0], node: operand_input };
+
+                                        println!("Spanned Operand: {:?}", spanned_operand);
+
+                                        let unwind_action: UnwindAction;
+                                        if data.is_cleanup {
+                                            unwind_action = UnwindAction::Terminate(UnwindTerminateReason::InCleanup);
+                                        }
+                                        else {
+                                            unwind_action = UnwindAction::Continue;
+                                        }
+                                        // Create a block terminator that will execute the function call we want to inject
+                                        let intermediary_terminator = TerminatorKind::Call {
+                                            func: operand_,
+                                            args: vec![spanned_operand],
+                                            destination: dest_place,
+                                            target: Some(create_capab_block),
+                                            unwind: unwind_action,
+                                            call_source: CallSource::Normal,
+                                            fn_span: SPANS[0],
+                                        };
+
+                                        patch.patch_terminator(bb, intermediary_terminator);
+                                        break;
+                                    },
+                                    _ => (),
+                                }
                             },
                             _ => (),
                         }
@@ -1201,7 +1656,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
         //     body.local_decls.push(LocalDecl::new(size_ty, SPANS[0]));
         // }
 
-        patch.apply(body);
+        // patch.apply(body);
 
         // // Second, downward, loop to find the first uses of those pointers as well as track their borrows and later uses such as dereferences
         // for (bb, data) in body.basic_blocks_mut().iter_enumerated_mut() {
@@ -1328,7 +1783,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
         //     }
         // }
 
-        // patch.apply(body);
+        patch.apply(body);
 
         // reorder basic blocks
         let rpo: IndexVec<BasicBlock, BasicBlock> =
