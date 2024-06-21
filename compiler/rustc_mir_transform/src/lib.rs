@@ -582,6 +582,8 @@ fn run_optimization_passes<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
                 // Has to be done before inlining, otherwise actual call will be almost always inlined.
                 // Also simple, so can just do first
                 &lower_slice_len::LowerSliceLenCalls,
+                // CAPSTONE-injection pass.
+                &inject_capstone::InjectCapstone,
                 // Perform inlining, which may add a lot of code.
                 &inline::Inline,
                 // Code from other crates may have storage markers, so this needs to happen after inlining.
@@ -630,8 +632,7 @@ fn run_optimization_passes<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
                 // Cleanup for human readability, off by default.
                 &prettify::ReorderBasicBlocks,
                 &prettify::ReorderLocals,
-                // CAPSTONE-injection pass.
-                &inject_capstone::InjectCapstone,
+                
                 // &prettify::ReorderBasicBlocks,
                 // &prettify::ReorderLocals,
                 // Dump the end result for testing and debugging purposes.
