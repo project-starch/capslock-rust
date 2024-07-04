@@ -194,7 +194,7 @@ impl Callbacks for TimePassesCallbacks {
         //
         self.time_passes = (config.opts.prints.is_empty() && config.opts.unstable_opts.time_passes)
             .then(|| config.opts.unstable_opts.time_passes_format);
-        config.opts.trimmed_def_paths = true;
+        config.opts.trimmed_def_paths = false;      // This was 'true' earlier and was causing an ugly error that I had to evade anyhow
     }
 }
 
@@ -1516,7 +1516,7 @@ pub fn main() -> ! {
         }
 
         if !IS_BOOTSTRAP {
-            eprintln!("\nCompiling using CAPSTONE-Rust custom compiler (v1.00)\n");
+            eprintln!("\nCompiling using CAPSTONE-Rust custom compiler (v2.00, pFRP-enabled)\n");
         }
     }
 
