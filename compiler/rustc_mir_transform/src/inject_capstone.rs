@@ -168,15 +168,15 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                         let mut _def_id_int = 0;
                                         let mut name = tcx.def_path_str(_def_id);
                                         
-                                        while name != "rapture::create_capab_from_ref" || name != "create_capab_from_ref" {
-                                            if name == "rapture::create_capab_from_ptr" || name == "create_capab_from_ptr" {
+                                        while name != "rapture::create_capab_from_ref" && name != "create_capab_from_ref" {
+                                            if name == "rapture::create_capab_from_ref" || name == "create_capab_from_ref" {
                                                 break;
                                             }
                                             _def_id_int += 1;
                                             _def_id = DefId { krate: CrateNum::new(rapture_crate_number), index: DefIndex::from_usize(_def_id_int) };
                                             name = tcx.def_path_str(_def_id);
                                         }
-                                        if name != "rapture::create_capab_from_ref" || name != "create_capab_from_ref" {
+                                        if name != "rapture::create_capab_from_ref" && name != "create_capab_from_ref" {
                                             println!("%$%$%$%$% Corrupted RaptureCell function definition: {}", name);
                                         }
 
@@ -811,7 +811,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                         let mut _def_id_int = 0;
                         let mut name = tcx.def_path_str(_def_id);
                         
-                        while name != "revoke" || name != "rapture::revoke" {
+                        while name != "revoke" && name != "rapture::revoke" {
                             if name == "rapture::revoke" || name == "revoke" {
                                 break;
                             }
@@ -819,7 +819,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                             _def_id = DefId { krate: CrateNum::new(rapture_crate_number), index: DefIndex::from_usize(_def_id_int) };
                             name = tcx.def_path_str(_def_id);
                         }
-                        if name != "revoke" || name != "rapture::revoke" {
+                        if name != "revoke" && name != "rapture::revoke" {
                             println!("%$%$%$%$% Corrupted RaptureCell function definition: {}", name);
                         }
 
