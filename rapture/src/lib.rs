@@ -12,15 +12,20 @@ pub fn create_capab_from_ptr<T>(ptr: *mut T) -> *mut T {
             // ".insn r 0x5b, 0x1, 0x4, {returned_ptr}, t0, x2", // LCC
             "mv t2, {ptr}",
             ".insn r 0x5b, 0x1, 0x4, t3, t2, x8", // LCC 
-            "bnez t3, 42", // If t3 is not 0, that means it is 1, which means it is already a capab, and hence skip the GENCAP
+            "bnez t3, 8", // If t3 is not 0, that means it is 1, which means it is already a capab, and hence skip the GENCAP
             ".insn r 0x5b, 0x1, 0x40, t2, t0, t1",  // GENCAP
-            "42: .insn r 0x5b, 0x1, 0x43, x0, t2, x0", // PRINT -- just to test what the capab is after this call (for debugging purposes)
+            "8: .insn r 0x5b, 0x1, 0x43, x0, t2, x0", // PRINT -- just to test what the capab is after this call (for debugging purposes)
             "mv {returned_ptr}, t2",
             ".insn r 0x5b, 0x1, 0x43, x0, {returned_ptr}, x0", // PRINT -- just to test what the capab is after this call (for debugging purposes)
             base = in(reg) base,
             top = in(reg) top,
             ptr = in(reg) ptr,
             returned_ptr = out(reg) returned_ptr,
+            // Clobber
+            out("t0") _,
+            out("t1") _,
+            out("t2") _,
+            out("t3") _,
         );
         returned_ptr
     }
@@ -39,17 +44,19 @@ pub fn borrow_mut<T>(ptr: *mut T) -> *mut T {
     println!("\nIn function borrow_mut");
     // CSBORROWMUT: .insn r 0x5b, 0x1, 0b1100, rd, rs1, x0;      rs1 = source capab, rd = destination capab
     unsafe {
-        let mut returned_ptr: *mut T = std::ptr::null_mut();
+        let mut returned_ptr;
         asm!(
             ".insn r 0x5b, 0x1, 0x43, x0, {ptr}, x0",           // PRINT -- to see what the source capab is before borrowing
             ".insn r 0x5b, 0x1, 0x4, t0, {ptr}, x8",            // LCC -- to check that the source is indeed a capab 
-            "beqz t0, 42",                                      // If t0 is 0, that means it is not a capab, and hence skip the CSBORROWMUT
+            "beqz t0, 12",                                      // If t0 is 0, that means it is not a capab, and hence skip the CSBORROWMUT
             ".insn r 0x5b, 0x1, 0b1100, {returned_ptr}, {ptr}, x0", // CSBORROWMUT
             ".insn r 0x5b, 0x1, 0x43, x0, {ptr}, x0",           // PRINT -- to see that the source capab has now changed
-            "42: mv {returned_ptr}, {ptr}",                     // If it is not a capab, then just return the ptr as is
+            "12: mv {returned_ptr}, {ptr}",                     // If it is not a capab, then just return the ptr as is
             ".insn r 0x5b, 0x1, 0x43, x0, {returned_ptr}, x0",  // PRINT -- just to see whether the borrow happened 
             returned_ptr = out(reg) returned_ptr,
             ptr = in(reg) ptr,
+            // Clobber
+            out("t0") _,
         );
         returned_ptr
     }
@@ -59,17 +66,19 @@ pub fn borrow<T>(ptr: *mut T) -> *const T {
     println!("\nIn function borrow");
     // CSBORROW: .insn r 0x5b, 0x1, 0b1000, rd, rs1, x0;      rs1 = source capab, rd = destination capab
     unsafe {
-        let mut returned_ptr: *const T = std::ptr::null();
+        let mut returned_ptr;
         asm!(
             ".insn r 0x5b, 0x1, 0x43, x0, {ptr}, x0",           // PRINT -- to see what the source capab is before borrowing
             ".insn r 0x5b, 0x1, 0x4, t0, {ptr}, x8",            // LCC -- to check that the source is indeed a capab 
-            "beqz t0, 42",                                      // If t0 is 0, that means it is not a capab, and hence skip the CSBORROW
+            "beqz t0, 12",                                      // If t0 is 0, that means it is not a capab, and hence skip the CSBORROW
             ".insn r 0x5b, 0x1, 0b1000, {returned_ptr}, {ptr}, x0", // CSBORROW
             ".insn r 0x5b, 0x1, 0x43, x0, {ptr}, x0",           // PRINT -- to see that the source capab has now changed
-            "42: mv {returned_ptr}, {ptr}",                     // If it is not a capab, then just return the ptr as is
+            "12: mv {returned_ptr}, {ptr}",                     // If it is not a capab, then just return the ptr as is
             ".insn r 0x5b, 0x1, 0x43, x0, {returned_ptr}, x0",  // PRINT -- just to see whether the borrow happened 
             returned_ptr = out(reg) returned_ptr,
             ptr = in(reg) ptr,
+            // Clobber
+            out("t0") _,
         );
         returned_ptr
     }
@@ -96,6 +105,8 @@ pub fn debug_print_ptr<T>(ptr: *mut T) {
             ".insn r 0x5b, 0x1, 0x43, x0, t3, x0",           // PRINT - Is it a capab?
             "lb t0, 0({ptr})",                                 // Load the first byte using the capab
             ptr = in(reg) ptr,
+            // Clobber
+            out("t3") _,
         );
         // println!("*ptr: {:?}", *ptr);
     }
