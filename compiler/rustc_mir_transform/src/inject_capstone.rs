@@ -181,7 +181,23 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                         }
 
                                         let root_ty = lhs_type;
-                                        let generic_arg = GenericArg::from(root_ty);
+                                        let target_ty;
+
+                                        // This root type we expect to be a reference. We now wish to find out what it is a reference to
+                                        match root_ty.kind() {
+                                            ty::Ref(_, ty, _) => {
+                                                target_ty = ty;
+                                            },
+                                            _ => {
+                                                println!("Error. Reference not found.");
+                                                break;
+                                            }
+                                        }
+
+                                        // For debugging purposes
+                                        println!("^^^ Root type: {:?}. Target type: {:?}", root_ty, target_ty);
+
+                                        let generic_arg = GenericArg::from(*target_ty);
                                         let generic_args = tcx.mk_args(&[generic_arg]);
 
                                         // Creating the sugar of all the structures for the function type to be injected
