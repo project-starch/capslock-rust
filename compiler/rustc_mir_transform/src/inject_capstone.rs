@@ -1,7 +1,22 @@
-// use std::cmp::max;
 use itertools::Itertools;
 use std::collections::VecDeque;
 use crate::MirPass;
+use rustc_middle::mir::patch::MirPatch;
+use crate::ty::Ty;
+use crate::{Spanned};
+use rustc_index::{IndexVec, IndexSlice};
+use rustc_middle::mir::*;
+use rustc_middle::mir::visit::MutVisitor;
+use rustc_middle::ty::{self, TyCtxt};
+use rustc_data_structures::fx::{FxHashMap, FxHashSet};
+use rustc_span::def_id::{CrateNum, DefIndex, DefId};
+use rustc_middle::ty::{List, GenericArg};
+use rustc_span::{Symbol, DUMMY_SP};
+static SPANS: [rustc_span::Span; 1] = [DUMMY_SP];
+
+// use std::cmp::max;
+// use rustc_middle::mir::HasLocalDecls;
+// use rustc_middle::mir::{dump_mir, PassWhere};
 // use rustc_ast::Mutability;
 // use rustc_ast::InlineAsmOptions;
 // use rustc_ast::InlineAsmTemplatePiece;
@@ -10,33 +25,20 @@ use crate::MirPass;
 // use rustc_index::bit_set::BitSet;
 // use rustc_index::interval::SparseIntervalMatrix;
 // use rustc_middle::mir::visit::MutVisitor;
-use rustc_middle::mir::patch::MirPatch;
-use crate::ty::Ty;
-use crate::{Spanned};
-// use rustc_middle::mir::HasLocalDecls;
-// use rustc_middle::mir::{dump_mir, PassWhere};
-use rustc_index::{IndexVec, IndexSlice};
-use rustc_middle::mir::*;
-use rustc_middle::mir::visit::MutVisitor;
 // use rustc_middle::mir::interpret::Scalar;
 // use crate::ty::ty_kind;
-use rustc_middle::ty::{self, TyCtxt};
-use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 // use crate::ty::BorrowKind;
 // use rustc_mir_dataflow::impls::MaybeLiveLocals;
 // use rustc_mir_dataflow::points::{/*save_as_intervals,*/ DenseLocationMap, PointIndex};
 // use rustc_mir_dataflow::Analysis;
 
-use rustc_span::def_id::{CrateNum, DefIndex, DefId};
-use rustc_middle::ty::{List, GenericArg};
-use rustc_span::{Symbol, DUMMY_SP};
-static SPANS: [rustc_span::Span; 1] = [DUMMY_SP];
-
+// Taken directly from another Rust MIR pass
 struct BasicBlockUpdater<'tcx> {
     map: IndexVec<BasicBlock, BasicBlock>,
     tcx: TyCtxt<'tcx>,
 }
 
+// Taken directly from another Rust MIR pass
 impl<'tcx> MutVisitor<'tcx> for BasicBlockUpdater<'tcx> {
     fn tcx(&self) -> TyCtxt<'tcx> {
         self.tcx
@@ -49,6 +51,7 @@ impl<'tcx> MutVisitor<'tcx> for BasicBlockUpdater<'tcx> {
     }
 }
 
+// Taken directly from another Rust MIR pass
 fn permute<I: rustc_index::Idx + Ord, T>(data: &mut IndexVec<I, T>, map: &IndexSlice<I, I>) {
     // FIXME: It would be nice to have a less-awkward way to apply permutations,
     // but I don't know one that exists.  `sort_by_cached_key` has logic for it
@@ -63,14 +66,15 @@ pub struct InjectCapstone;
 impl<'tcx> MirPass<'tcx> for InjectCapstone {
     fn run_pass(&self, tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
         println!("\nStart of CAPSTONE-Injection pass for function: {}", tcx.def_path_str(body.source.def_id()));
+        
         let local_decls_clone = body.local_decls.clone();
-
         let mut patch = MirPatch::new(body);
-
         let num_of_crates = tcx.crates(()).len();
 
+        // This is to dynamically locate the rapture crate and not hard-code its definition index
         let mut rapture_crate_number: usize = 0;
         let mut crate_num_flag: bool = true;
+
         // println!("Current crate symbol: {:?}", Symbol::as_str(& tcx.crate_name(CrateNum::from_usize(rapture_crate_number))));
         while crate_num_flag && num_of_crates > rapture_crate_number {
             rapture_crate_number += 1;
@@ -80,11 +84,10 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
 
         if crate_num_flag {
             println!("Rapture crate not found.");
-            return;
+            return;     // Can't run InjectCapstone if rapture is not present
         }
-
         else {
-            // Create a hash set that will store which variables we are performing create_capab for
+            // Create a hash set that will store which variables we are performing create_capab for. Used later in drop injection
             let mut capab_locals: FxHashSet<Local> = FxHashSet::default();
 
             println!("\n\n\tFirst pass.\n\n");
@@ -138,7 +141,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                     println!("RHS here. Reference found {:?} of type {:?}. The rhs place is {:?}", lhs.local, lhs_type, place);
                                     // This is the point where we will inject one function call to create_capab, passing in the pointer (that we just found) as an argument
 
-                                    // Hack: Convert the type to a string and check if it contains the term "argument"
+                                    // Hack: Convert the type to a string and check if it doesn't contain the term "argument" (this is to hackily avoid an error related to arguments passed directly into println!())
                                     let lhs_type_str = format!("{:?}", lhs_type);
                                     if !lhs_type_str.contains("Argument") && !place.projection.contains(&ProjectionElem::Deref) {
                                         capab_locals.insert(lhs.local);
@@ -163,6 +166,8 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                         });
 
                                         let crate_num = CrateNum::new(rapture_crate_number);
+
+                                        // Dynamically locate the function we want to inject, instead of hardcoding its definition index
                                         let def_index = DefIndex::from_usize(0);
                                         let mut _def_id = DefId { krate: crate_num, index: def_index };
                                         let mut _def_id_int = 0;
@@ -197,6 +202,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                         // For debugging purposes
                                         println!("^^^ Root type: {:?}. Target type: {:?}", root_ty, target_ty);
 
+                                        // The generic argument that goes inside the <> brackets of the function call. This is why we obtained the target type
                                         let generic_arg = GenericArg::from(*target_ty);
                                         let generic_args = tcx.mk_args(&[generic_arg]);
 
@@ -206,15 +212,15 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                         let const_operand = Box::new(ConstOperand { span: SPANS[0], user_ty: None, const_: const_ });
                                         let operand_ = Operand::Constant(const_operand);
 
-                                        println!("Operand: {:?}", operand_);
+                                        println!("Operand: {:?}", operand_);        // The function is uniquely denoted by an Operand type; this is not to be confused with the arguments to the function
 
-                                        let dest_place = Place {local: (lhs.local).into(), projection: List::empty()};
+                                        let dest_place = Place {local: (lhs.local).into(), projection: List::empty()};      // Every function has to have a target place where it will store its return value
 
                                         // This is how we create the arguments to be passed to the function that we are calling
                                         let operand_input = Operand::Copy(Place {local: lhs.local, projection: List::empty()});
                                         let spanned_operand = Spanned { span: SPANS[0], node: operand_input };
 
-                                        println!("Spanned Operand: {:?}", spanned_operand);
+                                        println!("Spanned Operand: {:?}", spanned_operand);     // This is the actual argument
 
                                         let unwind_action: UnwindAction;
                                         if data.is_cleanup {
@@ -223,7 +229,8 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                         else {
                                             unwind_action = UnwindAction::Continue;
                                         }
-                                        // Create a block terminator that will execute the function call we want to inject
+
+                                        // Create a block terminator that will execute the function call we want to inject. This terminator points from current block to our intermediary block
                                         let intermediary_terminator = TerminatorKind::Call {
                                             func: operand_,
                                             args: vec![spanned_operand],
@@ -262,6 +269,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
 
                             println!("\nGeneric RHS: {:?}", rhs);
                             match rhs {
+                                // (It is not always clear what the things we see in the rust source level deconstructs to at the MIR level.)
                                 // Candidates: Cast, Ref, AdressOf. And technically Use as well, but that's just moving the same pointer around.
                                 Rvalue::AddressOf(mutability, place) => {
                                     println!("RHS here. AddressOf found {:?} of type {:?}. The rhs place is {:?} with mutability {:?}", lhs.local, lhs_type, place, mutability);
@@ -284,12 +292,16 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                     });
 
                                     let crate_num = CrateNum::new(rapture_crate_number);
+
+                                    // Dynamically locate the function we want to inject, instead of hardcoding its definition index
                                     let def_index = DefIndex::from_usize(0);
                                     let mut _def_id = DefId { krate: crate_num, index: def_index };
                                     let mut _def_id_int = 0;
                                     let mut name = tcx.def_path_str(_def_id);
 
-                                    // Check whether the thing being borrowed was mutable
+                                    // Check whether the thing being borrowed was mutable. This changes the nature of the function we are injecting.
+                                    // Future note: I am unsure if two different functions based on this is even required. Rapturecell should definitely have the two functions, for manual injection needs it.
+                                    // But it may not be necessary for injecting at the MIR level. Mutability consistency is checked before this level is reached.
                                     let is_mut;
                                     match mutability {
                                         Mutability::Mut => {
@@ -301,7 +313,6 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                     }
 
                                     let function_name;
-                                    
                                     if is_mut {
                                         function_name = "rapture::borrow_mut";
                                     }
@@ -319,6 +330,8 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                     }
 
                                     let root_ty = lhs_type;
+
+                                    // The generic argument that goes inside the <> brackets of the function call. This is why we obtained the root type
                                     let generic_arg = GenericArg::from(root_ty);
                                     let generic_args = tcx.mk_args(&[generic_arg]);
 
@@ -328,15 +341,15 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                     let const_operand = Box::new(ConstOperand { span: SPANS[0], user_ty: None, const_: const_ });
                                     let operand_ = Operand::Constant(const_operand);
 
-                                    println!("Operand: {:?}", operand_);
+                                    println!("Operand: {:?}", operand_);        // The function is uniquely denoted by an Operand type; this is not to be confused with the arguments to the function
 
-                                    let dest_place = Place {local: (lhs.local).into(), projection: List::empty()};
+                                    let dest_place = Place {local: (lhs.local).into(), projection: List::empty()};    // Every function has to have a target place where it will store its return value
 
                                     // This is how we create the arguments to be passed to the function that we are calling
                                     let operand_input = Operand::Copy(Place {local: place.local, projection: List::empty()});
                                     let spanned_operand = Spanned { span: SPANS[0], node: operand_input };
 
-                                    println!("Spanned Operand: {:?}", spanned_operand);
+                                    println!("Spanned Operand: {:?}", spanned_operand);    // This is the actual argument
 
                                     let unwind_action: UnwindAction;
                                     if data.is_cleanup {
@@ -345,7 +358,8 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                     else {
                                         unwind_action = UnwindAction::Continue;
                                     }
-                                    // Create a block terminator that will execute the function call we want to inject
+
+                                    // Create a block terminator that will execute the function call we want to inject. This terminator points from current block to our intermediary block
                                     let intermediary_terminator = TerminatorKind::Call {
                                         func: operand_,
                                         args: vec![spanned_operand],
@@ -400,8 +414,8 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                     match cast_kind {
                                         CastKind::PtrToPtr => {
                                             println!("PtrToPtr cast found.");
-                                            // There are only two cases in which a borrow will take place
-                                            // The source pointer and the target type mismatch, ie:
+                                            // As per our decided scheme, there are only two cases in which a borrow will take place.
+                                            // When the source pointer and the target type mismatch, ie:
                                             // 1. Source is a primitive reference, target is a raw pointer
                                             // 2. Source is a raw pointer, target is a primitive reference
 
@@ -458,6 +472,8 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                                 });
 
                                                 let crate_num = CrateNum::new(rapture_crate_number);
+
+                                                // Dynamically locate the function we want to inject, instead of hardcoding its definition index
                                                 let def_index = DefIndex::from_usize(0);
                                                 let mut _def_id = DefId { krate: crate_num, index: def_index };
                                                 let mut _def_id_int = 0;
@@ -465,7 +481,9 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
 
                                                 let function_name;
 
-                                                // check if the lhs is a mutable type
+                                                // Check whether the thing being borrowed was mutable. This changes the nature of the function we are injecting.
+                                                // Future note: I am unsure if two different functions based on this is even required. Rapturecell should definitely have the two functions, for manual injection needs it.
+                                                // But it may not be necessary for injecting at the MIR level. Mutability consistency is checked before this level is reached.
                                                 let mut is_mutable = false;
                                                 match lhs_type.kind() {
                                                     ty::Ref(_, _, mutability) => {
@@ -495,6 +513,8 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                                 }
 
                                                 let root_ty = lhs_type;
+
+                                                // The generic argument that goes inside the <> brackets of the function call. This is why we obtained the root type
                                                 let generic_arg = GenericArg::from(root_ty);
                                                 let generic_args = tcx.mk_args(&[generic_arg]);
 
@@ -504,15 +524,15 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                                 let const_operand = Box::new(ConstOperand { span: SPANS[0], user_ty: None, const_: const_ });
                                                 let operand_ = Operand::Constant(const_operand);
 
-                                                println!("Operand: {:?}", operand_);
+                                                println!("Operand: {:?}", operand_);    // The function is uniquely denoted by an Operand type; this is not to be confused with the arguments to the function
 
-                                                let dest_place = Place {local: (lhs.local).into(), projection: List::empty()};
+                                                let dest_place = Place {local: (lhs.local).into(), projection: List::empty()};  // Every function has to have a target place where it will store its return value
 
                                                 // This is how we create the arguments to be passed to the function that we are calling
                                                 let operand_input = Operand::Copy(Place {local: lhs.local, projection: List::empty()});
                                                 let spanned_operand = Spanned { span: SPANS[0], node: operand_input };
 
-                                                println!("Spanned Operand: {:?}", spanned_operand);
+                                                println!("Spanned Operand: {:?}", spanned_operand);   // This is the actual argument
 
                                                 let unwind_action: UnwindAction;
                                                 if data.is_cleanup {
@@ -521,7 +541,8 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                                 else {
                                                     unwind_action = UnwindAction::Continue;
                                                 }
-                                                // Create a block terminator that will execute the function call we want to inject
+
+                                                // Create a block terminator that will execute the function call we want to inject. This terminator points from current block to our intermediary block
                                                 let intermediary_terminator = TerminatorKind::Call {
                                                     func: operand_,
                                                     args: vec![spanned_operand],
@@ -553,7 +574,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
             patch.apply(body);
             patch = MirPatch::new(body);
 
-            // reorder basic blocks
+            // Reorder basic blocks (routine copied from another Rust MIR pass)
             let rpo: IndexVec<BasicBlock, BasicBlock> = body.basic_blocks.reverse_postorder().iter().copied().collect();
             if rpo.iter().is_sorted() {
                 return;
@@ -564,9 +585,9 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
             updater.visit_body(body);
 
             permute(body.basic_blocks.as_mut(), &updater.map);
-            // reorder ends
+            // Reorder ends
 
-            // Traverse the basic blocks in DFS order by following the targets of the terminators
+            // Traverse the basic blocks in DFS order by following the targets of the terminators (flow order is assumed in the scope analysis module)
             
             let mut active_roots: Vec<Local> = vec![];
             let mut active_roots_per_bb: FxHashMap<BasicBlock, Vec<Local>> = FxHashMap::default();
@@ -638,6 +659,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                 previous_bb = bb;
             }
 
+            // Scope-flow analysis to find last-alive scopes and blocks for each root
             println!("Active roots per BB: {:?}", active_roots_per_bb);
 
             let mut last_block_in_scope: Vec<BasicBlock> = vec![];
@@ -760,12 +782,12 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                 last_active_roots_per_scope.get_mut(&scope).unwrap().push(root.clone());
             }
 
-            // This is where I think out loud a proposed modificaion for the drops:
-            // First, the algorithm I have coded up below is going to give us the last block of the last scope in which a root dies.
+            // A proposed modificaion for the drops:
+            // First, the algorithm I have coded up above is going to give us the last block of the last scope in which a root dies.
             // It does not necessarily give us the precise last block in which a root dies.
-            // So my idea is that I will use this algorithm in conjunction with the StorageDead markers to determine where the revoke has to be inserted.
-            // Earlier when I was doing this exclusively with the StorageDead markers, I was running into some issues that I do not recall at the moment (and I don't seem to have logged its details anywhere either)
-            // Now I will insert exactly one revoke per capab and I will do it at whichever occurs earlier: StorageDead or the last block of the last scope in which the root dies.
+            // So my idea is that I will use this algorithm in conjunction with the StorageDead markers to determine where the invalidate has to be inserted.
+            // Earlier when I was doing this exclusively with the StorageDead markers, I was running into some premature invalidation issues (even now those issues seem to persist)
+            // Now I will insert exactly one invalidate per capab and I will do it at whichever occurs earlier: StorageDead or the last block of the last scope in which the root dies.
 
             // Creating a fixed number of temporary variables of fixed type to be used by our injected functions
             let empty_tuple_type = Ty::new(tcx, ty::Tuple(List::empty()));
@@ -776,7 +798,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
             println!("\n\nThird pass.\n\n");
             println!("Capab locals: {:?}", capab_locals);
 
-            // In this pass we inject our revokes by checking when our tracked locals are being dropped (via the StorageDead statement)
+            // In this pass we inject our invalidates by checking when our tracked locals are being dropped (via the StorageDead statement)
             for (bb, data) in body.basic_blocks_mut().iter_enumerated_mut() {
                 for (i, stmt) in data.statements.clone().iter().enumerate().rev() {
                     match stmt {
@@ -792,10 +814,10 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                 }
 
                                 // Create an intermediary block that will be inserted between the current block and the next block
-                                let revoke_capab_block;
+                                let invalidate_capab_block;
 
                                 // This block has to point to the next block in the control flow graph (that terminator is an Option type)
-                                revoke_capab_block = patch.new_block(BasicBlockData {
+                                invalidate_capab_block = patch.new_block(BasicBlockData {
                                     statements: new_stmts.clone(),
                                     terminator: Some(data.terminator.as_ref().unwrap().clone()),
                                     is_cleanup: data.is_cleanup.clone(),
@@ -807,15 +829,15 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                 let mut _def_id_int = 0;
                                 let mut name = tcx.def_path_str(_def_id);
                                 
-                                while name != "revoke" && name != "rapture::revoke" {
-                                    if name == "rapture::revoke" || name == "revoke" {
+                                while name != "invalidate" && name != "rapture::invalidate" {
+                                    if name == "rapture::invalidate" || name == "invalidate" {
                                         break;
                                     }
                                     _def_id_int += 1;
                                     _def_id = DefId { krate: CrateNum::new(rapture_crate_number), index: DefIndex::from_usize(_def_id_int) };
                                     name = tcx.def_path_str(_def_id);
                                 }
-                                if name != "revoke" && name != "rapture::revoke" {
+                                if name != "invalidate" && name != "rapture::invalidate" {
                                     println!("%$%$%$%$% Corrupted RaptureCell function definition: {}", name);
                                 }
 
@@ -851,7 +873,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                     func: operand_,
                                     args: vec![spanned_operand],
                                     destination: dest_place,
-                                    target: Some(revoke_capab_block),
+                                    target: Some(invalidate_capab_block),
                                     unwind: unwind_action,
                                     call_source: CallSource::Normal,
                                     fn_span: SPANS[0],
@@ -937,15 +959,15 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                             let mut _def_id_int = 0;
                             let mut name = tcx.def_path_str(_def_id);
                             
-                            while name != "revoke" && name != "rapture::revoke" {
-                                if name == "rapture::revoke" || name == "revoke" {
+                            while name != "invalidate" && name != "rapture::invalidate" {
+                                if name == "rapture::invalidate" || name == "invalidate" {
                                     break;
                                 }
                                 _def_id_int += 1;
                                 _def_id = DefId { krate: CrateNum::new(rapture_crate_number), index: DefIndex::from_usize(_def_id_int) };
                                 name = tcx.def_path_str(_def_id);
                             }
-                            if name != "revoke" && name != "rapture::revoke" {
+                            if name != "invalidate" && name != "rapture::invalidate" {
                                 println!("%$%$%$%$% Corrupted RaptureCell function definition: {}", name);
                             }
 
