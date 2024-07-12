@@ -897,6 +897,8 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
 
             if capab_locals.len() > 0 {
                 println!("\n\n\tFourth pass. \n\n");
+                //  This pass is for those roots that may remain untracked by the Storage markers. This is technically a fail-safe mechanism.
+
                 // Form a set of the blocks that require a drop
                 let mut drop_blocks: FxHashSet<BasicBlock> = FxHashSet::default();
                 for return_point in return_points.iter() {
@@ -944,8 +946,6 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                 dropped_refs.push(root_temp.clone());
                                 println!("******* Performing drop for root with reftemp: {:?}, at block: {:?}", root_temp, &bb);
                             }
-                            // The following code injects drop and invalidate for some root allocation local. Right now they are unreachable in the CFG and only go to themselvers.
-                            // The target location block is to be decided given the search for termination blocks.
                             
                             let invalidate_block = patch.new_block(BasicBlockData {
                                 statements: vec![],
