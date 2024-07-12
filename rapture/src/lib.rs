@@ -86,16 +86,17 @@ pub fn borrow<T>(ptr: *mut T) -> *const T {
     }
 }
 
-pub fn revoke<T>(ptr: *mut T) {
-    println!("\nIn function revoke");
+pub fn invalidate<T>(ptr: *mut T) {
+    // csdrop            0001011 .....    ..... 001 ..... 1011011 @r
+    println!("\nIn function invalidate");
     unsafe {
         asm!(
             ".insn r 0x5b, 0x1, 0x43, x0, {ptr}, x0",           // PRINT -- seeing the capab before revoking
             ".insn r 0x5b, 0x1, 0x4, t0, {ptr}, x8",            // LCC -- to check that the source is indeed a capab
-            "beqz t0, 12f",                                      // If t0 is 0, that means it is not a capab, and hence skip the REVOKE
-            ".insn r 0x5b, 0b001, 0b0000000, x0, {ptr}, x0",    // REVOKE
+            "beqz t0, 12f",                                      // If t0 is 0, that means it is not a capab, and hence skip the DROP
+            ".insn r 0x5b, 0b001, 0b0001011, x0, {ptr}, x0",    // DROP
             ".insn r 0x5b, 0x1, 0x43, x0, {ptr}, x0",           // PRINT -- testing that revoke happened; this PRINT only happens if the revoke happened
-            "12:",                                             // Label for skipping the REVOKE
+            "12:",                                             // Label for skipping the DROP
             ptr = in(reg) ptr,
         );
     }
