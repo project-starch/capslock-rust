@@ -572,7 +572,6 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
             }
 
             patch.apply(body);
-            patch = MirPatch::new(body);
 
             // Reorder basic blocks (routine copied from another Rust MIR pass)
             let rpo: IndexVec<BasicBlock, BasicBlock> = body.basic_blocks.reverse_postorder().iter().copied().collect();
@@ -586,6 +585,8 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
 
             permute(body.basic_blocks.as_mut(), &updater.map);
             // Reorder ends
+
+            patch = MirPatch::new(body);
 
             // Traverse the basic blocks in DFS order by following the targets of the terminators (flow order is assumed in the scope analysis module)
             
@@ -799,96 +800,96 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
             println!("Capab locals: {:?}", capab_locals);
 
             // In this pass we inject our invalidates by checking when our tracked locals are being dropped (via the StorageDead statement)
-            for (bb, data) in body.basic_blocks_mut().iter_enumerated_mut() {
-                for (i, stmt) in data.statements.clone().iter().enumerate().rev() {
-                    match stmt {
-                        Statement { kind: StatementKind::StorageDead(local), .. } => {
-                            if capab_locals.contains(local) {
-                                // Shift all the statements beyond our target statement to a new vector and clear them from the original block
-                                let mut new_stmts = vec![];
-                                for (j, stmt) in data.statements.iter_mut().enumerate() {
-                                    if j > i { 
-                                        new_stmts.push(stmt.clone());
-                                        stmt.make_nop();
-                                    }
-                                }
+            // for (bb, data) in body.basic_blocks_mut().iter_enumerated_mut() {
+            //     for (i, stmt) in data.statements.clone().iter().enumerate().rev() {
+            //         match stmt {
+            //             Statement { kind: StatementKind::StorageDead(local), .. } => {
+            //                 if capab_locals.contains(local) {
+            //                     // Shift all the statements beyond our target statement to a new vector and clear them from the original block
+            //                     let mut new_stmts = vec![];
+            //                     for (j, stmt) in data.statements.iter_mut().enumerate() {
+            //                         if j > i { 
+            //                             new_stmts.push(stmt.clone());
+            //                             stmt.make_nop();
+            //                         }
+            //                     }
 
-                                // Create an intermediary block that will be inserted between the current block and the next block
-                                let invalidate_capab_block;
+            //                     // Create an intermediary block that will be inserted between the current block and the next block
+            //                     let invalidate_capab_block;
 
-                                // This block has to point to the next block in the control flow graph (that terminator is an Option type)
-                                invalidate_capab_block = patch.new_block(BasicBlockData {
-                                    statements: new_stmts.clone(),
-                                    terminator: Some(data.terminator.as_ref().unwrap().clone()),
-                                    is_cleanup: data.is_cleanup.clone(),
-                                });
+            //                     // This block has to point to the next block in the control flow graph (that terminator is an Option type)
+            //                     invalidate_capab_block = patch.new_block(BasicBlockData {
+            //                         statements: new_stmts.clone(),
+            //                         terminator: Some(data.terminator.as_ref().unwrap().clone()),
+            //                         is_cleanup: data.is_cleanup.clone(),
+            //                     });
 
-                                let crate_num = CrateNum::new(rapture_crate_number);
-                                let def_index = DefIndex::from_usize(0);
-                                let mut _def_id = DefId { krate: crate_num, index: def_index };
-                                let mut _def_id_int = 0;
-                                let mut name = tcx.def_path_str(_def_id);
+            //                     let crate_num = CrateNum::new(rapture_crate_number);
+            //                     let def_index = DefIndex::from_usize(0);
+            //                     let mut _def_id = DefId { krate: crate_num, index: def_index };
+            //                     let mut _def_id_int = 0;
+            //                     let mut name = tcx.def_path_str(_def_id);
                                 
-                                while name != "invalidate" && name != "rapture::invalidate" {
-                                    if name == "rapture::invalidate" || name == "invalidate" {
-                                        break;
-                                    }
-                                    _def_id_int += 1;
-                                    _def_id = DefId { krate: CrateNum::new(rapture_crate_number), index: DefIndex::from_usize(_def_id_int) };
-                                    name = tcx.def_path_str(_def_id);
-                                }
-                                if name != "invalidate" && name != "rapture::invalidate" {
-                                    println!("%$%$%$%$% Corrupted RaptureCell function definition: {}", name);
-                                }
+            //                     while name != "invalidate" && name != "rapture::invalidate" {
+            //                         if name == "rapture::invalidate" || name == "invalidate" {
+            //                             break;
+            //                         }
+            //                         _def_id_int += 1;
+            //                         _def_id = DefId { krate: CrateNum::new(rapture_crate_number), index: DefIndex::from_usize(_def_id_int) };
+            //                         name = tcx.def_path_str(_def_id);
+            //                     }
+            //                     if name != "invalidate" && name != "rapture::invalidate" {
+            //                         println!("%$%$%$%$% Corrupted RaptureCell function definition: {}", name);
+            //                     }
 
-                                let root_ty = local_decls_clone[*local].ty;
-                                let generic_arg = GenericArg::from(root_ty);
-                                let generic_args = tcx.mk_args(&[generic_arg]);
+            //                     let root_ty = local_decls_clone[*local].ty;
+            //                     let generic_arg = GenericArg::from(root_ty);
+            //                     let generic_args = tcx.mk_args(&[generic_arg]);
 
-                                // Creating the sugar of all the structures for the function type to be injected
-                                let ty_ = Ty::new(tcx, ty::FnDef(_def_id, generic_args));
-                                let const_ = Const::Val(ConstValue::ZeroSized, ty_);
-                                let const_operand = Box::new(ConstOperand { span: SPANS[0], user_ty: None, const_: const_ });
-                                let operand_ = Operand::Constant(const_operand);
+            //                     // Creating the sugar of all the structures for the function type to be injected
+            //                     let ty_ = Ty::new(tcx, ty::FnDef(_def_id, generic_args));
+            //                     let const_ = Const::Val(ConstValue::ZeroSized, ty_);
+            //                     let const_operand = Box::new(ConstOperand { span: SPANS[0], user_ty: None, const_: const_ });
+            //                     let operand_ = Operand::Constant(const_operand);
 
-                                println!("Operand: {:?}", operand_);
+            //                     println!("Operand: {:?}", operand_);
 
-                                let dest_place = Place {local: (empty_tuple_temp).into(), projection: List::empty()};
+            //                     let dest_place = Place {local: (empty_tuple_temp).into(), projection: List::empty()};
 
-                                // This is how we create the arguments to be passed to the function that we are calling
-                                let operand_input = Operand::Copy(Place {local: *local, projection: List::empty()});
-                                let spanned_operand = Spanned { span: SPANS[0], node: operand_input };
+            //                     // This is how we create the arguments to be passed to the function that we are calling
+            //                     let operand_input = Operand::Copy(Place {local: *local, projection: List::empty()});
+            //                     let spanned_operand = Spanned { span: SPANS[0], node: operand_input };
 
-                                println!("Spanned Operand: {:?}", spanned_operand);
+            //                     println!("Spanned Operand: {:?}", spanned_operand);
 
-                                let unwind_action: UnwindAction;
-                                if data.is_cleanup {
-                                    unwind_action = UnwindAction::Terminate(UnwindTerminateReason::InCleanup);
-                                }
-                                else {
-                                    unwind_action = UnwindAction::Continue;
-                                }
-                                // Create a block terminator that will execute the function call we want to inject
-                                let intermediary_terminator = TerminatorKind::Call {
-                                    func: operand_,
-                                    args: vec![spanned_operand],
-                                    destination: dest_place,
-                                    target: Some(invalidate_capab_block),
-                                    unwind: unwind_action,
-                                    call_source: CallSource::Normal,
-                                    fn_span: SPANS[0],
-                                };
+            //                     let unwind_action: UnwindAction;
+            //                     if data.is_cleanup {
+            //                         unwind_action = UnwindAction::Terminate(UnwindTerminateReason::InCleanup);
+            //                     }
+            //                     else {
+            //                         unwind_action = UnwindAction::Continue;
+            //                     }
+            //                     // Create a block terminator that will execute the function call we want to inject
+            //                     let intermediary_terminator = TerminatorKind::Call {
+            //                         func: operand_,
+            //                         args: vec![spanned_operand],
+            //                         destination: dest_place,
+            //                         target: Some(invalidate_capab_block),
+            //                         unwind: unwind_action,
+            //                         call_source: CallSource::Normal,
+            //                         fn_span: SPANS[0],
+            //                     };
 
-                                patch.patch_terminator(bb, intermediary_terminator);
-                                capab_locals.remove(local);
-                                dropped_refs.push(local.clone());
-                                break;
-                            }
-                        },
-                        _ => (),
-                    }
-                }
-            }
+            //                     patch.patch_terminator(bb, intermediary_terminator);
+            //                     capab_locals.remove(local);
+            //                     dropped_refs.push(local.clone());
+            //                     break;
+            //                 }
+            //             },
+            //             _ => (),
+            //         }
+            //     }
+            // }
 
             patch.apply(body);
             patch = MirPatch::new(body);
@@ -937,106 +938,163 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                         
                         roots_to_drop.retain(|x| !dropped_refs.contains(x));
 
-                        let mut expected_terminator = data.terminator.as_ref().unwrap().kind.clone();
-                        for root_temp in roots_to_drop.iter() {
-                            if dropped_refs.contains(root_temp) {
-                                continue;
+                        let crate_num = CrateNum::new(rapture_crate_number);
+                        let def_index = DefIndex::from_usize(0);
+                        let mut _def_id = DefId { krate: crate_num, index: def_index };
+                        let mut _def_id_int = 0;
+                        let mut name = tcx.def_path_str(_def_id);
+                        
+                        while name != "invalidate" && name != "rapture::invalidate" {
+                            if name == "rapture::invalidate" || name == "invalidate" {
+                                break;
                             }
-                            else {
-                                dropped_refs.push(root_temp.clone());
-                                println!("******* Performing drop for root with reftemp: {:?}, at block: {:?}", root_temp, &bb);
-                            }
-                            
-                            let invalidate_block = patch.new_block(BasicBlockData {
-                                statements: vec![],
-                                terminator: Some(data.terminator.as_ref().unwrap().clone()),
-                                is_cleanup: data.is_cleanup.clone(),
-                            });
-
-                            let crate_num = CrateNum::new(rapture_crate_number);
-                            let def_index = DefIndex::from_usize(0);
-                            let mut _def_id = DefId { krate: crate_num, index: def_index };
-                            let mut _def_id_int = 0;
-                            let mut name = tcx.def_path_str(_def_id);
-                            
-                            while name != "invalidate" && name != "rapture::invalidate" {
-                                if name == "rapture::invalidate" || name == "invalidate" {
-                                    break;
-                                }
-                                _def_id_int += 1;
-                                _def_id = DefId { krate: CrateNum::new(rapture_crate_number), index: DefIndex::from_usize(_def_id_int) };
-                                name = tcx.def_path_str(_def_id);
-                            }
-                            if name != "invalidate" && name != "rapture::invalidate" {
-                                println!("%$%$%$%$% Corrupted RaptureCell function definition: {}", name);
-                            }
-
-                            let root_ty = local_decls_clone[*root_temp].ty;
-                            let generic_arg = GenericArg::from(root_ty);
-                            let generic_args = tcx.mk_args(&[generic_arg]);
-
-                            // Creating the sugar of all the structures for the function type to be injected
-                            let ty_ = Ty::new(tcx, ty::FnDef(_def_id, generic_args));
-                            let const_ = Const::Val(ConstValue::ZeroSized, ty_);
-                            let const_operand = Box::new(ConstOperand { span: SPANS[0], user_ty: None, const_: const_ });
-                            let operand_ = Operand::Constant(const_operand);
-
-                            println!("Operand: {:?}", operand_);
-
-                            let dest_place = Place {local: (empty_tuple_temp).into(), projection: List::empty()};
-
-                            // This is how we create the arguments to be passed to the function that we are calling
-                            let operand_input = Operand::Copy(Place {local: *root_temp, projection: List::empty()});
-                            let spanned_operand = Spanned { span: SPANS[0], node: operand_input };
-
-                            println!("Spanned Operand: {:?}", spanned_operand);
-
-                            let unwind_action: UnwindAction;
-                            if data.is_cleanup {
-                                unwind_action = UnwindAction::Terminate(UnwindTerminateReason::InCleanup);
-                            }
-                            else {
-                                unwind_action = UnwindAction::Continue;
-                            }
-                            // Create a block terminator that will execute the function call we want to inject
-                            let invalidate_terminator = TerminatorKind::Call {
-                                func: operand_,
-                                args: vec![spanned_operand],
-                                destination: dest_place,
-                                target: Some(invalidate_block),
-                                unwind: unwind_action,
-                                call_source: CallSource::Normal,
-                                fn_span: SPANS[0],
-                            };
-                            
-                            let drop_place = Place {local: (*root_temp).into(), projection: List::empty()};
-                            
-                            let drop_block = patch.new_block(BasicBlockData {
-                                statements: vec![],
-                                terminator: Some(data.terminator.as_ref().unwrap().clone()),
-                                is_cleanup: data.is_cleanup.clone(),
-                            });
-
-                            let unwind_action: UnwindAction;
-                            if data.is_cleanup {
-                                unwind_action = UnwindAction::Terminate(UnwindTerminateReason::InCleanup);
-                            }
-                            else {
-                                unwind_action = UnwindAction::Continue;
-                            }
-
-                            let drop_terminator = TerminatorKind::Drop {
-                                place: drop_place,
-                                target: drop_block, // TODO: placeholder
-                                unwind: unwind_action,
-                                replace: false,
-                            };
-
-                            patch.patch_terminator(invalidate_block, drop_terminator);
-                            patch.patch_terminator(drop_block, expected_terminator.clone());
-                            expected_terminator = invalidate_terminator.clone();
+                            _def_id_int += 1;
+                            _def_id = DefId { krate: CrateNum::new(rapture_crate_number), index: DefIndex::from_usize(_def_id_int) };
+                            name = tcx.def_path_str(_def_id);
                         }
-                        patch.patch_terminator(bb, expected_terminator);
+                        if name != "invalidate" && name != "rapture::invalidate" {
+                            println!("%$%$%$%$% Corrupted RaptureCell function definition: {}", name);
+                        }
+
+                        let dest_place = Place {local: (empty_tuple_temp).into(), projection: List::empty()};
+
+                        let unwind_action: UnwindAction;
+                        if data.is_cleanup {
+                            unwind_action = UnwindAction::Terminate(UnwindTerminateReason::InCleanup);
+                        }
+                        else {
+                            unwind_action = UnwindAction::Continue;
+                        }
+
+                        match &data.terminator.as_ref().unwrap().kind {
+                            TerminatorKind::Call {func, args, destination, target, unwind, call_source, fn_span} => {
+                                let mut expected_target = target.clone();
+                                for root_temp in roots_to_drop.iter() {
+                                    if dropped_refs.contains(root_temp) {
+                                        continue;
+                                    }
+                                    else {
+                                        dropped_refs.push(root_temp.clone());
+                                        println!("******* Performing drop for root with reftemp: {:?}, at block: {:?}", root_temp, &bb);
+                                    }
+                                    
+                                    let root_ty = local_decls_clone[*root_temp].ty;
+                                    let generic_arg = GenericArg::from(root_ty);
+                                    let generic_args = tcx.mk_args(&[generic_arg]);
+            
+                                    // Creating the sugar of all the structures for the function type to be injected
+                                    let ty_ = Ty::new(tcx, ty::FnDef(_def_id, generic_args));
+                                    let const_ = Const::Val(ConstValue::ZeroSized, ty_);
+                                    let const_operand = Box::new(ConstOperand { span: SPANS[0], user_ty: None, const_: const_ });
+                                    let operand_ = Operand::Constant(const_operand);
+            
+                                    println!("Operand: {:?}", operand_);
+            
+                                    // This is how we create the arguments to be passed to the function that we are calling
+                                    let operand_input = Operand::Copy(Place {local: *root_temp, projection: List::empty()});
+                                    let spanned_operand = Spanned { span: SPANS[0], node: operand_input };
+            
+                                    println!("Spanned Operand: {:?}", spanned_operand);
+                                    
+                                    let invalidate_block = patch.new_block(BasicBlockData {
+                                        statements: vec![],
+                                        terminator: Some(data.terminator.as_ref().unwrap().clone()),
+                                        is_cleanup: data.is_cleanup.clone(),
+                                    });
+
+                                    // Create a block terminator that will execute the function call we want to inject
+                                    let invalidate_terminator = TerminatorKind::Call {
+                                        func: operand_,
+                                        args: vec![spanned_operand],
+                                        destination: dest_place,
+                                        target: expected_target.clone(),
+                                        unwind: unwind_action.clone(),
+                                        call_source: CallSource::Normal,
+                                        fn_span: SPANS[0],
+                                    };
+
+                                    patch.patch_terminator(invalidate_block, invalidate_terminator);
+                                    expected_target = Some(invalidate_block);
+                                }
+                                let expected_terminator = TerminatorKind::Call {
+                                    func: func.clone(),
+                                    args: args.clone(),
+                                    destination: destination.clone(),
+                                    target: expected_target,
+                                    unwind: unwind.clone(),
+                                    call_source: call_source.clone(),
+                                    fn_span: fn_span.clone(),
+                                };
+                                patch.patch_terminator(bb, expected_terminator);
+                            },
+                            _ => {
+                                let mut expected_terminator = data.terminator.as_ref().unwrap().kind.clone();
+                                for root_temp in roots_to_drop.iter() {
+                                    if dropped_refs.contains(root_temp) {
+                                        continue;
+                                    }
+                                    else {
+                                        dropped_refs.push(root_temp.clone());
+                                        println!("******* Performing drop for root with reftemp: {:?}, at block: {:?}", root_temp, &bb);
+                                    }
+                                    
+                                    let root_ty = local_decls_clone[*root_temp].ty;
+                                    let generic_arg = GenericArg::from(root_ty);
+                                    let generic_args = tcx.mk_args(&[generic_arg]);
+            
+                                    // Creating the sugar of all the structures for the function type to be injected
+                                    let ty_ = Ty::new(tcx, ty::FnDef(_def_id, generic_args));
+                                    let const_ = Const::Val(ConstValue::ZeroSized, ty_);
+                                    let const_operand = Box::new(ConstOperand { span: SPANS[0], user_ty: None, const_: const_ });
+                                    let operand_ = Operand::Constant(const_operand);
+            
+                                    println!("Operand: {:?}", operand_);
+            
+                                    // This is how we create the arguments to be passed to the function that we are calling
+                                    let operand_input = Operand::Copy(Place {local: *root_temp, projection: List::empty()});
+                                    let spanned_operand = Spanned { span: SPANS[0], node: operand_input };
+            
+                                    println!("Spanned Operand: {:?}", spanned_operand);
+                                    
+                                    let invalidate_block = patch.new_block(BasicBlockData {
+                                        statements: vec![],
+                                        terminator: Some(data.terminator.as_ref().unwrap().clone()),
+                                        is_cleanup: data.is_cleanup.clone(),
+                                    });
+
+                                    // Create a block terminator that will execute the function call we want to inject
+                                    let invalidate_terminator = TerminatorKind::Call {
+                                        func: operand_,
+                                        args: vec![spanned_operand],
+                                        destination: dest_place,
+                                        target: Some(invalidate_block),
+                                        unwind: unwind_action.clone(),
+                                        call_source: CallSource::Normal,
+                                        fn_span: SPANS[0],
+                                    };
+                                    
+                                    let drop_place = Place {local: (*root_temp).into(), projection: List::empty()};
+                                    
+                                    let drop_block = patch.new_block(BasicBlockData {
+                                        statements: vec![],
+                                        terminator: Some(data.terminator.as_ref().unwrap().clone()),
+                                        is_cleanup: data.is_cleanup.clone(),
+                                    });
+
+                                    let drop_terminator = TerminatorKind::Drop {
+                                        place: drop_place,
+                                        target: drop_block, // TODO: placeholder
+                                        unwind: unwind_action.clone(),
+                                        replace: false,
+                                    };
+
+                                    patch.patch_terminator(invalidate_block, drop_terminator);
+                                    patch.patch_terminator(drop_block, expected_terminator.clone());
+                                    expected_terminator = invalidate_terminator.clone();
+                                }
+                                patch.patch_terminator(bb, expected_terminator);
+                            },
+                        }
                     }
                 }   
             }
