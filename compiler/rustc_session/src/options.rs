@@ -225,6 +225,7 @@ top_level_options!(
         color: ColorConfig [UNTRACKED],
 
         verbose: bool [TRACKED_NO_CRATE_HASH],
+        capstone: bool [TRACKED],
     }
 );
 
