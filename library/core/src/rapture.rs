@@ -1,5 +1,37 @@
 use crate::arch::asm;
 
+#[stable(feature = "core_primitive", since = "1.43.0")]
+pub fn create_capab_from_ptr_unsized<T>(ptr: *mut T, size : usize) -> *mut T where T : ?Sized {
+    let base = ptr as *const T as *const () as usize;
+    let top = base + size;
+    unsafe {
+        let mut returned_ptr: *mut ();
+        asm!(
+            "mv t0, {base}",
+            "mv t1, {top}",
+            // ".insn r 0x5b, 0x1, 0x4, {returned_ptr}, t0, x2", // LCC
+            ".insn r 0x5b, 0x1, 0x43, x0, {ptr}, x0", // PRINT -- just to test what the capab is before this call (for debugging purposes)
+            "mv t2, {ptr}",
+            ".insn r 0x5b, 0x1, 0x4, t3, t2, x8", // LCC
+            "bnez t3, 8f", // If t3 is not 0, that means it is 1, which means it is already a capab, and hence skip the GENCAP
+            ".insn r 0x5b, 0x1, 0x40, t2, t0, t1",  // GENCAP
+            "8: .insn r 0x5b, 0x1, 0x43, x0, t2, x0", // PRINT -- just to test what the capab is after this call (for debugging purposes)
+            "mv {returned_ptr}, t2",
+            ".insn r 0x5b, 0x1, 0x43, x0, {returned_ptr}, x0", // PRINT -- just to test what the capab is after this call (for debugging purposes)
+            base = in(reg) base,
+            top = in(reg) top,
+            ptr = in(reg) ptr as *mut (),
+            returned_ptr = out(reg) returned_ptr,
+            // Clobber
+            out("t0") _,
+            out("t1") _,
+            out("t2") _,
+            out("t3") _,
+        );
+        ptr.with_addr(returned_ptr as usize)
+    }
+}
+
 /// Create a capability from a pointer
 #[stable(feature = "core_primitive", since = "1.43.0")]
 pub fn create_capab_from_ptr<T>(ptr: *mut T) -> *mut T {

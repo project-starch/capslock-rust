@@ -233,6 +233,15 @@ impl Global {
             },
         }
     }
+
+    #[cfg(target_arch = "riscv64")]
+    fn alloc_to_cap(r : Result<NonNull<[u8]>, AllocError>, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+        r.map(|p| {
+            unsafe {
+                NonNull::new_unchecked(core::rapture::create_capab_from_ptr_unsized(p.as_ptr(), layout.size()))
+            }
+        })
+    }
 }
 
 #[unstable(feature = "allocator_api", issue = "32838")]
@@ -243,12 +252,15 @@ unsafe impl Allocator for Global {
         #[cfg(not(target_arch = "riscv64"))]
         { self.alloc_impl(layout, false) }
         #[cfg(target_arch = "riscv64")]
-        { self.alloc_impl(layout, false) }
+        { Global::alloc_to_cap(self.alloc_impl(layout, false), layout) }
     }
 
     #[inline]
     fn allocate_zeroed(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        self.alloc_impl(layout, true)
+        #[cfg(not(target_arch = "riscv64"))]
+        { self.alloc_impl(layout, true) }
+        #[cfg(target_arch = "riscv64")]
+        { Global::alloc_to_cap(self.alloc_impl(layout, true), layout) }
     }
 
     #[inline]
