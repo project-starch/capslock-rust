@@ -240,7 +240,10 @@ impl Global {
 unsafe impl Allocator for Global {
     #[inline]
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        self.alloc_impl(layout, false)
+        #[cfg(not(target_arch = "riscv64"))]
+        { self.alloc_impl(layout, false) }
+        #[cfg(target_arch = "riscv64")]
+        { self.alloc_impl(layout, false) }
     }
 
     #[inline]
@@ -253,7 +256,10 @@ unsafe impl Allocator for Global {
         if layout.size() != 0 {
             // SAFETY: `layout` is non-zero in size,
             // other conditions must be upheld by the caller
-            unsafe { dealloc(ptr.as_ptr(), layout) }
+            #[cfg(not(target_arch = "riscv64"))]
+            { unsafe { dealloc(ptr.as_ptr(), layout) } }
+            #[cfg(target_arch = "riscv64")]
+            { unsafe { dealloc(core::rapture::scrub(ptr.as_ptr()), layout) } }
         }
     }
 

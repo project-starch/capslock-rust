@@ -467,4 +467,9 @@ pub mod simd {
     pub use crate::core_simd::simd::*;
 }
 
+#[cfg(target_arch = "riscv64")]
+#[stable(feature = "core_primitive", since = "1.43.0")]
+#[allow(missing_docs)]
+pub mod rapture;
+
 include!("primitive_docs.rs");
