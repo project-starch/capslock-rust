@@ -77,7 +77,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
         // This is to dynamically locate the rapture crate and not hard-code its definition index
 
         let rapture_crate_number = *(tcx.crates(()).iter()
-            .find(|x| tcx.crate_name(**x).as_str() == "rapture")
+            .find(|x| tcx.crate_name(**x).as_str() == "core")
             .expect("Rapture crate not found."));
 
         // Create a hash set that will store which variables we are performing create_capab for. Used later in drop injection
@@ -166,15 +166,15 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                     let mut _def_id_int = 0;
                                     let mut name = tcx.def_path_str(_def_id);
 
-                                    while name != "rapture::create_capab_from_ref" && name != "create_capab_from_ref" {
-                                        if name == "rapture::create_capab_from_ref" || name == "create_capab_from_ref" {
+                                    while name != "core::rapture::create_capab_from_ref" && name != "create_capab_from_ref" {
+                                        if name == "core::rapture::create_capab_from_ref" || name == "create_capab_from_ref" {
                                             break;
                                         }
                                         _def_id_int += 1;
                                         _def_id = DefId { krate: rapture_crate_number, index: DefIndex::from_usize(_def_id_int) };
                                         name = tcx.def_path_str(_def_id);
                                     }
-                                    if name != "rapture::create_capab_from_ref" && name != "create_capab_from_ref" {
+                                    if name != "core::rapture::create_capab_from_ref" && name != "create_capab_from_ref" {
                                         println!("%$%$%$%$% Corrupted RaptureCell function definition: {}", name);
                                     }
 
@@ -307,10 +307,10 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
 
                                 let function_name;
                                 if is_mut {
-                                    function_name = "rapture::borrow_mut";
+                                    function_name = "core::rapture::borrow_mut";
                                 }
                                 else {
-                                    function_name = "rapture::borrow";
+                                    function_name = "core::rapture::borrow";
                                 }
 
                                 while name != function_name {
@@ -480,10 +480,10 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                             }
 
                                             if is_mutable {
-                                                function_name = "rapture::borrow_mut";
+                                                function_name = "core::rapture::borrow_mut";
                                             }
                                             else {
-                                                function_name = "rapture::borrow";
+                                                function_name = "core::rapture::borrow";
                                             }
 
                                             println!("Function name: {}", function_name);
@@ -621,7 +621,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                                         Const::Val(_constval, ty) => {
                                             match ty.kind() {
                                                 ty::FnDef(_def_id, _) => {
-                                                    if tcx.def_path_str(_def_id) == "rapture::create_capab_from_ref" || tcx.def_path_str(_def_id) == "rapture::create_capab_from_ptr" || tcx.def_path_str(_def_id) == "create_capab_from_ref" || tcx.def_path_str(_def_id) == "create_capab_from_ptr" {
+                                                    if tcx.def_path_str(_def_id) == "core::rapture::create_capab_from_ref" || tcx.def_path_str(_def_id) == "core::rapture::create_capab_from_ptr" || tcx.def_path_str(_def_id) == "create_capab_from_ref" || tcx.def_path_str(_def_id) == "create_capab_from_ptr" {
                                                         if !active_roots.contains(&destination.local) {
                                                             active_roots.push(destination.local.clone());
                                                         }
@@ -929,15 +929,15 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
                     let mut _def_id_int = 0;
                     let mut name = tcx.def_path_str(_def_id);
 
-                    while name != "invalidate" && name != "rapture::invalidate" {
-                        if name == "rapture::invalidate" || name == "invalidate" {
+                    while name != "invalidate" && name != "core::rapture::invalidate" {
+                        if name == "core::rapture::invalidate" || name == "invalidate" {
                             break;
                         }
                         _def_id_int += 1;
                         _def_id = DefId { krate: rapture_crate_number, index: DefIndex::from_usize(_def_id_int) };
                         name = tcx.def_path_str(_def_id);
                     }
-                    if name != "invalidate" && name != "rapture::invalidate" {
+                    if name != "invalidate" && name != "core::rapture::invalidate" {
                         println!("%$%$%$%$% Corrupted RaptureCell function definition: {}", name);
                     }
 

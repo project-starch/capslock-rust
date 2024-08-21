@@ -271,7 +271,10 @@ unsafe impl Allocator for Global {
             #[cfg(not(target_arch = "riscv64"))]
             { unsafe { dealloc(ptr.as_ptr(), layout) } }
             #[cfg(target_arch = "riscv64")]
-            { unsafe { dealloc(core::rapture::scrub(ptr.as_ptr()), layout) } }
+            {
+                core::rapture::invalidate(ptr.as_ptr());
+                unsafe { dealloc(core::rapture::scrub(ptr.as_ptr()), layout) }
+            }
         }
     }
 
