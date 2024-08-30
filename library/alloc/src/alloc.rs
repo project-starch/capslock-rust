@@ -1,5 +1,7 @@
 //! Memory allocation APIs
 
+#![allow(unused, unreachable_code)]
+
 #![stable(feature = "alloc_module", since = "1.28.0")]
 
 #[cfg(not(test))]
@@ -54,8 +56,28 @@ extern "Rust" {
 #[cfg_attr(not(bootstrap), lang = "global_alloc_ty")]
 pub struct Global;
 
+/// has the process been initialised?
+#[stable(feature = "alloc_module", since = "1.28.0")]
+pub static mut INIT_DONE : bool = false;
+
+
 #[cfg(test)]
 pub use std::alloc::Global;
+
+// #[cfg(target_arch = "riscv64")]
+// fn alloc_to_cap(r : Result<NonNull<[u8]>, AllocError>, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
+//     r.map(|p| {
+//         unsafe {
+//             NonNull::new_unchecked(core::rapture::create_capab_from_ptr_unsized(p.as_ptr(), layout.size()))
+//         }
+//     })
+// }
+
+#[cfg(target_arch = "riscv64")]
+fn alloc_to_cap_raw(r : *mut u8, size: usize) -> *mut u8 {
+    core::rapture::create_capab_from_ptr_unsized(r, (((size - 1) >> 3) + 1) << 3)
+}
+
 
 /// Allocate memory with the global allocator.
 ///
@@ -97,7 +119,11 @@ pub unsafe fn alloc(layout: Layout) -> *mut u8 {
         // stable code until it is actually stabilized.
         core::ptr::read_volatile(&__rust_no_alloc_shim_is_unstable);
 
-        __rust_alloc(layout.size(), layout.align())
+        if cfg!(target_arch = "riscv64") {
+            alloc_to_cap_raw(__rust_alloc(layout.size(), layout.align()), layout.size())
+        } else {
+            __rust_alloc(layout.size(), layout.align())
+        }
     }
 }
 
@@ -116,7 +142,11 @@ pub unsafe fn alloc(layout: Layout) -> *mut u8 {
 #[stable(feature = "global_alloc", since = "1.28.0")]
 #[inline]
 pub unsafe fn dealloc(ptr: *mut u8, layout: Layout) {
-    unsafe { __rust_dealloc(ptr, layout.size(), layout.align()) }
+    if cfg!(target_arch = "riscv64") {
+        unsafe { core::rapture::invalidate(ptr); __rust_dealloc(core::rapture::scrub(ptr), layout.size(), layout.align()) }
+    } else {
+        unsafe { __rust_dealloc(ptr, layout.size(), layout.align()) }
+    }
 }
 
 /// Reallocate memory with the global allocator.
@@ -135,7 +165,14 @@ pub unsafe fn dealloc(ptr: *mut u8, layout: Layout) {
 #[must_use = "losing the pointer will leak memory"]
 #[inline]
 pub unsafe fn realloc(ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-    unsafe { __rust_realloc(ptr, layout.size(), layout.align(), new_size) }
+    if cfg!(target_arch = "riscv64") {
+        unsafe {
+            core::rapture::invalidate(ptr);
+            alloc_to_cap_raw(__rust_realloc(core::rapture::scrub(ptr), layout.size(), layout.align(), new_size), new_size)
+        }
+    } else {
+        unsafe { __rust_realloc(ptr, layout.size(), layout.align(), new_size) }
+    }
 }
 
 /// Allocate zero-initialized memory with the global allocator.
@@ -233,15 +270,6 @@ impl Global {
             },
         }
     }
-
-    #[cfg(target_arch = "riscv64")]
-    fn alloc_to_cap(r : Result<NonNull<[u8]>, AllocError>, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        r.map(|p| {
-            unsafe {
-                NonNull::new_unchecked(core::rapture::create_capab_from_ptr_unsized(p.as_ptr(), layout.size()))
-            }
-        })
-    }
 }
 
 #[unstable(feature = "allocator_api", issue = "32838")]
@@ -249,18 +277,12 @@ impl Global {
 unsafe impl Allocator for Global {
     #[inline]
     fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        #[cfg(not(target_arch = "riscv64"))]
-        { self.alloc_impl(layout, false) }
-        #[cfg(target_arch = "riscv64")]
-        { Global::alloc_to_cap(self.alloc_impl(layout, false), layout) }
+        self.alloc_impl(layout, false)
     }
 
     #[inline]
     fn allocate_zeroed(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        #[cfg(not(target_arch = "riscv64"))]
-        { self.alloc_impl(layout, true) }
-        #[cfg(target_arch = "riscv64")]
-        { Global::alloc_to_cap(self.alloc_impl(layout, true), layout) }
+        self.alloc_impl(layout, true)
     }
 
     #[inline]
@@ -268,13 +290,7 @@ unsafe impl Allocator for Global {
         if layout.size() != 0 {
             // SAFETY: `layout` is non-zero in size,
             // other conditions must be upheld by the caller
-            #[cfg(not(target_arch = "riscv64"))]
             { unsafe { dealloc(ptr.as_ptr(), layout) } }
-            #[cfg(target_arch = "riscv64")]
-            {
-                core::rapture::invalidate(ptr.as_ptr());
-                unsafe { dealloc(core::rapture::scrub(ptr.as_ptr()), layout) }
-            }
         }
     }
 
@@ -286,6 +302,13 @@ unsafe impl Allocator for Global {
         new_layout: Layout,
     ) -> Result<NonNull<[u8]>, AllocError> {
         // SAFETY: all conditions must be upheld by the caller
+        // #[cfg(target_arch = "riscv64")]
+        // unsafe {
+        //     core::rapture::invalidate(ptr.as_ptr());
+        //     let ptr = NonNull::new_unchecked(core::rapture::scrub(ptr.as_ptr()));
+        //     self.grow_impl(ptr, old_layout, new_layout, false)
+        // }
+        // #[cfg(not(target_arch = "riscv64"))]
         unsafe { self.grow_impl(ptr, old_layout, new_layout, false) }
     }
 
@@ -297,6 +320,13 @@ unsafe impl Allocator for Global {
         new_layout: Layout,
     ) -> Result<NonNull<[u8]>, AllocError> {
         // SAFETY: all conditions must be upheld by the caller
+        // #[cfg(target_arch = "riscv64")]
+        // unsafe {
+        //     core::rapture::invalidate(ptr.as_ptr());
+        //     let ptr = NonNull::new_unchecked(core::rapture::scrub(ptr.as_ptr()));
+        //     self.grow_impl(ptr, old_layout, new_layout, true)
+        // }
+        // #[cfg(not(target_arch = "riscv64"))]
         unsafe { self.grow_impl(ptr, old_layout, new_layout, true) }
     }
 
@@ -312,6 +342,8 @@ unsafe impl Allocator for Global {
             "`new_layout.size()` must be smaller than or equal to `old_layout.size()`"
         );
 
+        #[cfg(target_arch = "riscv64")]
+        { panic!("shrink is not supported"); }
         match new_layout.size() {
             // SAFETY: conditions must be upheld by the caller
             0 => unsafe {
@@ -470,5 +502,28 @@ impl<T: Copy> WriteCloneIntoRaw for T {
     unsafe fn write_clone_into_raw(&self, target: *mut Self) {
         // We can always copy in-place, without ever involving a local value.
         unsafe { target.copy_from_nonoverlapping(self, 1) };
+    }
+}
+
+/// Guard for initialisation
+#[stable(feature = "global_alloc", since = "1.28.0")]
+#[derive(Debug)]
+pub struct InitGuard {
+    _private: ()
+}
+
+impl InitGuard {
+    /// Creates a new initialisation guard
+    #[stable(feature = "global_alloc", since = "1.28.0")]
+    pub fn new() -> Self {
+        unsafe { INIT_DONE = false; }
+        InitGuard { _private: () }
+    }
+}
+
+#[stable(feature = "global_alloc", since = "1.28.0")]
+impl Drop for InitGuard {
+    fn drop(&mut self) {
+        unsafe { INIT_DONE = true; }
     }
 }

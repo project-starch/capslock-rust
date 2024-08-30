@@ -145,6 +145,7 @@ fn lang_start_internal(
     // user code from `main` or, more nefariously, as described in e.g. issue #86030.
     // SAFETY: Only called once during runtime initialization.
     panic::catch_unwind(move || unsafe { init(argc, argv, sigpipe) }).map_err(rt_abort)?;
+    unsafe { alloc::alloc::INIT_DONE = true; }
     let ret_code = panic::catch_unwind(move || panic::catch_unwind(main).unwrap_or(101) as isize)
         .map_err(move |e| {
             mem::forget(e);

@@ -133,7 +133,7 @@ top_level_options!(
     pub struct Options {
         /// The crate config requested for the session, which may be combined
         /// with additional crate configurations during the compile process.
-        #[rustc_lint_opt_deny_field_access("use `Session::crate_types` instead of this field")]
+        // #[rustc_lint_opt_deny_field_access("use `Session::crate_types` instead of this field")]
         crate_types: Vec<CrateType> [TRACKED],
         optimize: OptLevel [TRACKED],
         /// Include the `debug_assertions` flag in dependency tracking, since it
@@ -225,7 +225,7 @@ top_level_options!(
         color: ColorConfig [UNTRACKED],
 
         verbose: bool [TRACKED_NO_CRATE_HASH],
-        capstone: bool [TRACKED],
+        capstone: Option<String> [TRACKED],
     }
 );
 
