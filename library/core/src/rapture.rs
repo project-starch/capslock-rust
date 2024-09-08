@@ -177,7 +177,7 @@ pub fn debug_print_ptr<T>(ptr: *mut T) {
         asm!(
             ".insn r 0x5b, 0x1, 0x4, t3, {ptr}, x8", // LCC
             ".insn r 0x5b, 0x1, 0x43, x0, {ptr}, x0",           // PRINT - Raw value of the ptr ".insn r 0x5b, 0x1, 0x43, x0, t3, x0",           // PRINT - Is it a capab?
-            "lb t0, 0({ptr})",                                 // Load the first byte using the capab
+            // "lb t0, 0({ptr})",                                 // Load the first byte using the capab
             ptr = in(reg) ptr,
             // Clobber
             out("t3") _,

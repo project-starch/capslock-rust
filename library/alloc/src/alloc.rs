@@ -119,10 +119,13 @@ pub unsafe fn alloc(layout: Layout) -> *mut u8 {
         // stable code until it is actually stabilized.
         core::ptr::read_volatile(&__rust_no_alloc_shim_is_unstable);
 
-        if cfg!(target_arch = "riscv64") {
-            alloc_to_cap_raw(__rust_alloc(layout.size(), layout.align()), layout.size())
-        } else {
-            __rust_alloc(layout.size(), layout.align())
+        #[cfg(target_arch = "riscv64")]
+        {
+            return alloc_to_cap_raw(__rust_alloc(layout.size(), layout.align()), layout.size());
+        }
+        #[cfg(not(target_arch = "riscv64"))]
+        {
+            return __rust_alloc(layout.size(), layout.align());
         }
     }
 }
@@ -142,11 +145,10 @@ pub unsafe fn alloc(layout: Layout) -> *mut u8 {
 #[stable(feature = "global_alloc", since = "1.28.0")]
 #[inline]
 pub unsafe fn dealloc(ptr: *mut u8, layout: Layout) {
-    if cfg!(target_arch = "riscv64") {
+    #[cfg(target_arch = "riscv64")]
         unsafe { core::rapture::invalidate(ptr); __rust_dealloc(core::rapture::scrub(ptr), layout.size(), layout.align()) }
-    } else {
-        unsafe { __rust_dealloc(ptr, layout.size(), layout.align()) }
-    }
+    #[cfg(not(target_arch = "riscv64"))]
+    unsafe { __rust_dealloc(ptr, layout.size(), layout.align()) }
 }
 
 /// Reallocate memory with the global allocator.
@@ -165,14 +167,13 @@ pub unsafe fn dealloc(ptr: *mut u8, layout: Layout) {
 #[must_use = "losing the pointer will leak memory"]
 #[inline]
 pub unsafe fn realloc(ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-    if cfg!(target_arch = "riscv64") {
-        unsafe {
-            core::rapture::invalidate(ptr);
-            alloc_to_cap_raw(__rust_realloc(core::rapture::scrub(ptr), layout.size(), layout.align(), new_size), new_size)
-        }
-    } else {
-        unsafe { __rust_realloc(ptr, layout.size(), layout.align(), new_size) }
+    #[cfg(target_arch = "riscv64")]
+    unsafe {
+        core::rapture::invalidate(ptr);
+        alloc_to_cap_raw(__rust_realloc(core::rapture::scrub(ptr), layout.size(), layout.align(), new_size), new_size)
     }
+    #[cfg(not(target_arch = "riscv64"))]
+    unsafe { __rust_realloc(ptr, layout.size(), layout.align(), new_size) }
 }
 
 /// Allocate zero-initialized memory with the global allocator.
