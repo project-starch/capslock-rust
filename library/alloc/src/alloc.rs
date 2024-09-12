@@ -343,8 +343,6 @@ unsafe impl Allocator for Global {
             "`new_layout.size()` must be smaller than or equal to `old_layout.size()`"
         );
 
-        #[cfg(target_arch = "riscv64")]
-        { panic!("shrink is not supported"); }
         match new_layout.size() {
             // SAFETY: conditions must be upheld by the caller
             0 => unsafe {

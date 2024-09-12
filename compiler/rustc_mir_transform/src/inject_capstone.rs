@@ -1,9 +1,9 @@
-#![allow(unused_variables, unused_mut)]
+#![allow(unused)]
 
 // use itertools::Itertools;
 // use std::collections::VecDeque;
 use rustc_middle::mir::patch::MirPatch;
-use crate::ty::Ty;
+use crate::ty::{Ty, TyKind};
 use crate::{Spanned};
 use rustc_index::{IndexVec, IndexSlice};
 use rustc_middle::mir::*;
@@ -35,14 +35,14 @@ impl<'tcx> MutVisitor<'tcx> for BasicBlockUpdater<'tcx> {
 }
 
 // Taken directly from another Rust MIR pass
-fn permute<I: rustc_index::Idx + Ord, T>(data: &mut IndexVec<I, T>, map: &IndexSlice<I, I>) {
+// fn permute<I: rustc_index::Idx + Ord, T>(data: &mut IndexVec<I, T>, map: &IndexSlice<I, I>) {
     // FIXME: It would be nice to have a less-awkward way to apply permutations,
     // but I don't know one that exists.  `sort_by_cached_key` has logic for it
     // internally, but not in a way that we're allowed to use here.
-    let mut enumerated: Vec<_> = std::mem::take(data).into_iter_enumerated().collect();
-    enumerated.sort_by_key(|p| map[p.0]);
-    *data = enumerated.into_iter().map(|p| p.1).collect();
-}
+//     let mut enumerated: Vec<_> = std::mem::take(data).into_iter_enumerated().collect();
+//     enumerated.sort_by_key(|p| map[p.0]);
+//     *data = enumerated.into_iter().map(|p| p.1).collect();
+// }
 
 pub struct InjectCapstone;
 
@@ -157,64 +157,75 @@ fn first_pass<'ctx>(tcx: TyCtxt<'ctx>, body: &mut Body<'ctx>, rapture_crate_numb
                             // Candidates: Cast, Ref, AdressOf. And technically Use as well, but that's just moving the same pointer around.
                             Rvalue::AddressOf(mutability, place) => {
                                 // Seems that this only includes getting raw addresses?
-                                insert_borrow(tcx, rapture_crate_number, &mut patch, bb, data,
-                                    i, mutability, lhs_type, lhs);
-                                _patch_empty = false;
-                                break;
+                                if !place.is_indirect_first_projection() || (*local_decls)[place.local].ty.is_ref() {
+                                    match lhs_type.kind() {
+                                        crate::ty::RawPtr(tm)=> {
+                                            if tm.ty.is_sized(tcx, ParamEnv::reveal_all()) {
+                                                // && lhs_type.peel_refs().is_sized(tcx, ParamEnv::reveal_all()) {
+                                                eprintln!("Ok this is the place {:?} type {:?} {:?}", place, lhs_type, lhs_type.peel_refs());
+                                                insert_borrow(tcx, rapture_crate_number, &mut patch, bb, data,
+                                                    i, mutability, lhs_type, lhs);
+                                                _patch_empty = false;
+                                                break;
+                                            }
+                                        },
+                                        _ => ()
+                                    }
+                                }
                             },
                             Rvalue::Cast(cast_kind, operand, ty) => {
-                                // println!("Cast found of kind {:?} with operand {:?} and type {:?}", cast_kind, operand, ty);
-                                match cast_kind {
-                                    CastKind::PtrToPtr => {
-                                        // println!("PtrToPtr cast found.");
-                                        // As per our decided scheme, there are only two cases in which a borrow will take place.
-                                        // When the source pointer and the target type mismatch, ie:
-                                        // 1. Source is a primitive reference, target is a raw pointer
-                                        // 2. Source is a raw pointer, target is a primitive reference
+                                // // println!("Cast found of kind {:?} with operand {:?} and type {:?}", cast_kind, operand, ty);
+                                // match cast_kind {
+                                //     CastKind::PtrToPtr => {
+                                //         // println!("PtrToPtr cast found.");
+                                //         // As per our decided scheme, there are only two cases in which a borrow will take place.
+                                //         // When the source pointer and the target type mismatch, ie:
+                                //         // 1. Source is a primitive reference, target is a raw pointer
+                                //         // 2. Source is a raw pointer, target is a primitive reference
 
-                                        let mut source_is_ref = false;
-                                        let mut target_is_ref = false;
+                                //         let mut source_is_ref = false;
+                                //         let mut target_is_ref = false;
 
-                                        match operand {
-                                            Operand::Copy(Place {local, ..})
-                                            | Operand::Move(Place {local, ..}) => {
-                                                let source_type = (*local_decls)[*local].ty;
-                                                match source_type.kind() {
-                                                    ty::Ref(_, _, _) => {
-                                                        source_is_ref = true;
-                                                    },
-                                                    _ => (),
-                                                }
-                                            },
-                                            _ => (),
-                                        }
+                                //         match operand {
+                                //             Operand::Copy(Place {local, ..})
+                                //             | Operand::Move(Place {local, ..}) => {
+                                //                 let source_type = (*local_decls)[*local].ty;
+                                //                 match source_type.kind() {
+                                //                     ty::Ref(_, _, _) => {
+                                //                         source_is_ref = true;
+                                //                     },
+                                //                     _ => (),
+                                //                 }
+                                //             },
+                                //             _ => (),
+                                //         }
 
-                                        match ty.kind() {
-                                            ty::Ref(_, _, _) => {
-                                                target_is_ref = true;
-                                            },
-                                            _ => (),
-                                        }
+                                //         match ty.kind() {
+                                //             ty::Ref(_, _, _) => {
+                                //                 target_is_ref = true;
+                                //             },
+                                //             _ => (),
+                                //         }
 
-                                        if (source_is_ref && !target_is_ref) || (!source_is_ref && target_is_ref) {
-                                            insert_borrow(tcx, rapture_crate_number, &mut patch, bb, data, i,
-                                            &lhs_type.ref_mutability().unwrap_or(Mutability::Not), lhs_type, lhs);
-                                            _patch_empty = false;
-                                            break;
-                                        }
-                                        else {
-                                            println!("Casting ptr to ptr or ref to ref. No borrow here.");
-                                        }
-                                    },
-                                    _ => (),
-                                }
+                                //         if (source_is_ref && !target_is_ref) || (!source_is_ref && target_is_ref) {
+                                //             insert_borrow(tcx, rapture_crate_number, &mut patch, bb, data, i,
+                                //             &lhs_type.ref_mutability().unwrap_or(Mutability::Not), lhs_type, lhs);
+                                //             _patch_empty = false;
+                                //             break;
+                                //         }
+                                //         else {
+                                //             println!("Casting ptr to ptr or ref to ref. No borrow here.");
+                                //         }
+                                //     },
+                                //     _ => (),
+                                // }
                             },
                             Rvalue::Ref(_region, borrow_kind, place) => {
                                 // check if this is &*p where p is a raw pointer and of a sized type
                                 if place.is_indirect_first_projection() &&
                                     (*local_decls)[place.local].ty.is_unsafe_ptr() &&
                                     lhs_type.peel_refs().is_sized(tcx, ParamEnv::reveal_all()){
-                                    // println!("Ref {:?} = {:?}", lhs_type, place);
+                                    // println!("Ref {:?} = {:?}, lhs type peeled = {:?}", lhs_type, place, lhs_type.peel_refs());
                                     let mutability = match borrow_kind {
                                         BorrowKind::Mut { .. } => Mutability::Mut,
                                         _ => Mutability::Not
@@ -236,15 +247,15 @@ fn first_pass<'ctx>(tcx: TyCtxt<'ctx>, body: &mut Body<'ctx>, rapture_crate_numb
         patch.apply(body);
 
         // Reorder basic blocks (routine copied from another Rust MIR pass)
-        let rpo: IndexVec<BasicBlock, BasicBlock> = body.basic_blocks.reverse_postorder().iter().copied().collect();
-        if !rpo.iter().is_sorted() {
-            let mut updater = BasicBlockUpdater { map: rpo.invert_bijective_mapping(), tcx };
-            debug_assert_eq!(updater.map[START_BLOCK], START_BLOCK);
-            updater.visit_body(body);
+        // let rpo: IndexVec<BasicBlock, BasicBlock> = body.basic_blocks.reverse_postorder().iter().copied().collect();
+        // if !rpo.iter().is_sorted() {
+        //     let mut updater = BasicBlockUpdater { map: rpo.invert_bijective_mapping(), tcx };
+        //     debug_assert_eq!(updater.map[START_BLOCK], START_BLOCK);
+        //     updater.visit_body(body);
 
-            permute(body.basic_blocks.as_mut(), &updater.map);
-            // Reorder ends
-        }
+        //     permute(body.basic_blocks.as_mut(), &updater.map);
+        //     // Reorder ends
+        // }
 
         // break;
         if _patch_empty {
