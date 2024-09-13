@@ -271,10 +271,11 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
             // println!("Crate name = {:?}", sess.opts.crate_name);
         // }
         match (sess.opts.capstone.as_ref(), sess.opts.crate_name.as_ref()) {
-            (None, _) | (_, None) => false,
             (Some(c), Some(n)) => {
-                c == n
-            }
+                c == "*" || c == n
+            },
+            (Some(c), None) => c == "*",
+            _ => false
         }
     }
 
