@@ -46,38 +46,63 @@ impl<'tcx> MutVisitor<'tcx> for BasicBlockUpdater<'tcx> {
 
 pub struct InjectCapstone;
 
-fn get_func_def_id<'ctx>(tcx: TyCtxt<'ctx>, crate_num: CrateNum, func_name: &str) -> Option<DefId> {
-    // Dynamically locate the function we want to inject, instead of hardcoding its definition index
-    let def_index = DefIndex::from_usize(0);
-    let mut _def_id = DefId { krate: crate_num, index: def_index };
-    let mut _def_id_int = 0;
-    let mut name = tcx.def_path_str(_def_id);
+fn get_func_def_id<'ctx>(tcx: TyCtxt<'ctx>, crate_num_opt: Option<CrateNum>, func_name: &str) -> Option<DefId> {
+    match crate_num_opt {
+        Some (crate_num) => {
+            // Dynamically locate the function we want to inject, instead of hardcoding its definition index
+            let def_index = DefIndex::from_usize(0);
+            let mut _def_id = DefId { krate: crate_num, index: def_index };
+            let mut _def_id_int = 0;
+            let mut name = tcx.def_path_str(_def_id);
 
-    // Check whether the thing being borrowed was mutable. This changes the nature of the function we are injecting.
-    // Future note: I am unsure if two different functions based on this is even required. Rapturecell should definitely have the two functions, for manual injection needs it.
-    // But it may not be necessary for injecting at the MIR level. Mutability consistency is checked before this level is reached.
-    while name != func_name {
-        _def_id_int += 1;
-        _def_id = DefId { krate: crate_num, index: DefIndex::from_usize(_def_id_int) };
-        name = tcx.def_path_str(_def_id);
+            // Check whether the thing being borrowed was mutable. This changes the nature of the function we are injecting.
+            // Future note: I am unsure if two different functions based on this is even required. Rapturecell should definitely have the two functions, for manual injection needs it.
+            // But it may not be necessary for injecting at the MIR level. Mutability consistency is checked before this level is reached.
+            while !name.ends_with(func_name) {
+                _def_id_int += 1;
+                _def_id = DefId { krate: crate_num, index: DefIndex::from_usize(_def_id_int) };
+                name = tcx.def_path_str(_def_id);
+            }
+            if !name.ends_with(func_name) {
+                None
+            } else {
+                Some(_def_id)
+            }
+        }
+        None => {
+            // look for it locally
+            tcx.iter_local_def_id().find_map(
+                |local_def_id| {
+                    if tcx.def_path_str(local_def_id.to_def_id()).ends_with(func_name) {
+                        Some (local_def_id.to_def_id())
+                    } else {
+                        None
+                    }
+                }
+            )
+        }
     }
-    if name != func_name {
-        None
+}
+
+fn get_borrow_func_name(m: &Mutability, is_ref: bool, is_local: bool) -> &'static str {
+    if is_local {
+        match (*m, is_ref) {
+            (Mutability::Mut, false) => "rapture::borrow_mut",
+            (Mutability::Not, false) => "rapture::borrow",
+            (Mutability::Mut, true) => "rapture::borrow_mut_ref",
+            (Mutability::Not, true) => "rapture::borrow_ref",
+        }
     } else {
-        Some(_def_id)
+        match (*m, is_ref) {
+            (Mutability::Mut, false) => "rapture::borrow_mut",
+            (Mutability::Not, false) => "rapture::borrow",
+            (Mutability::Mut, true) => "rapture::borrow_mut_ref",
+            (Mutability::Not, true) => "rapture::borrow_ref",
+        }
     }
 }
 
-fn get_borrow_func_name(m: &Mutability, is_ref: bool) -> &'static str {
-    match (*m, is_ref) {
-        (Mutability::Mut, false) => "core::rapture::borrow_mut",
-        (Mutability::Not, false) => "core::rapture::borrow",
-        (Mutability::Mut, true) => "core::rapture::borrow_mut_ref",
-        (Mutability::Not, true) => "core::rapture::borrow_ref",
-    }
-}
-
-fn insert_borrow<'ctx>(tcx: TyCtxt<'ctx>, rapture_crate_number : CrateNum,
+fn insert_borrow<'ctx>(tcx: TyCtxt<'ctx>, rapture_crate_number : Option<CrateNum>,
         patch: &mut MirPatch<'ctx>, bb: BasicBlock, data: &mut BasicBlockData<'ctx>, i: usize,
         mutability: &Mutability, lhs_type: Ty<'ctx>, lhs: &Place<'ctx>) {
     // Shift all the statements beyond our target statement to a new vector and clear them from the original block
@@ -92,7 +117,7 @@ fn insert_borrow<'ctx>(tcx: TyCtxt<'ctx>, rapture_crate_number : CrateNum,
     });
 
     let def_id = get_func_def_id(tcx, rapture_crate_number,
-        get_borrow_func_name(mutability, lhs_type.is_ref())
+        get_borrow_func_name(mutability, lhs_type.is_ref(), rapture_crate_number.is_none())
     ).expect("Unable to find function.");
 
     let root_ty = lhs_type;
@@ -139,10 +164,17 @@ fn insert_borrow<'ctx>(tcx: TyCtxt<'ctx>, rapture_crate_number : CrateNum,
 }
 
 
-fn first_pass<'ctx>(tcx: TyCtxt<'ctx>, body: &mut Body<'ctx>, rapture_crate_number : CrateNum, local_decls : &IndexVec<Local, LocalDecl<'ctx>>) {
+fn first_pass<'ctx>(tcx: TyCtxt<'ctx>, body: &mut Body<'ctx>,
+        rapture_crate_number : Option<CrateNum>, local_decls : &IndexVec<Local, LocalDecl<'ctx>>) {
+    if tcx.def_path_str(body.source.def_id()).contains("rapture") {
+        // we don't do this to rapture itself
+        return;
+    }
+    let param_env = tcx.param_env(body.source.def_id());
     loop {
         let mut patch = MirPatch::new(body);
         let mut _patch_empty = true;
+
 
         for (bb, data) in body.basic_blocks_mut().iter_enumerated_mut() {
             // FIXME: it's not correct to always skip the last statement
@@ -158,9 +190,10 @@ fn first_pass<'ctx>(tcx: TyCtxt<'ctx>, body: &mut Body<'ctx>, rapture_crate_numb
                             Rvalue::AddressOf(mutability, place) => {
                                 // Seems that this only includes getting raw addresses?
                                 if !place.is_indirect_first_projection() || (*local_decls)[place.local].ty.is_ref() {
+                                    eprintln!("Bro yeah place {:?} type {:?} {:?}", place, lhs_type, lhs_type.peel_refs());
                                     match lhs_type.kind() {
                                         crate::ty::RawPtr(tm)=> {
-                                            if tm.ty.is_sized(tcx, ParamEnv::reveal_all()) {
+                                            if tm.ty.is_sized(tcx, param_env) {
                                                 // && lhs_type.peel_refs().is_sized(tcx, ParamEnv::reveal_all()) {
                                                 eprintln!("Ok this is the place {:?} type {:?} {:?}", place, lhs_type, lhs_type.peel_refs());
                                                 insert_borrow(tcx, rapture_crate_number, &mut patch, bb, data,
@@ -224,7 +257,7 @@ fn first_pass<'ctx>(tcx: TyCtxt<'ctx>, body: &mut Body<'ctx>, rapture_crate_numb
                                 // check if this is &*p where p is a raw pointer and of a sized type
                                 if place.is_indirect_first_projection() &&
                                     (*local_decls)[place.local].ty.is_unsafe_ptr() &&
-                                    lhs_type.peel_refs().is_sized(tcx, ParamEnv::reveal_all()){
+                                    lhs_type.peel_refs().is_sized(tcx, param_env){
                                     // println!("Ref {:?} = {:?}, lhs type peeled = {:?}", lhs_type, place, lhs_type.peel_refs());
                                     let mutability = match borrow_kind {
                                         BorrowKind::Mut { .. } => Mutability::Mut,
@@ -266,17 +299,27 @@ fn first_pass<'ctx>(tcx: TyCtxt<'ctx>, body: &mut Body<'ctx>, rapture_crate_numb
 
 impl<'tcx> MirPass<'tcx> for InjectCapstone {
     fn is_enabled(&self, sess: &rustc_session::Session) -> bool {
+        // const EXCLUDED_CRATES : &'static [&'static str] = ["alloc", "core", "hashbrow"];
+
         // checking executable crate type as a hack to avoid dependent libraries
         // if sess.opts.capstone.is_some() {
             // println!("Crate name = {:?}", sess.opts.crate_name);
         // }
-        match (sess.opts.capstone.as_ref(), sess.opts.crate_name.as_ref()) {
-            (Some(c), Some(n)) => {
-                c == "*" || c == n
-            },
-            (Some(c), None) => c == "*",
-            _ => false
-        }
+
+        sess.target.arch == "riscv64" &&
+            sess.opts.crate_name.as_ref() != Some(&"alloc".to_string()) &&
+            // sess.opts.crate_name.as_ref() != Some(&"core".to_string()) &&
+            sess.opts.crate_name.as_ref() != Some(&"hashbrown".to_string()) &&
+            sess.opts.crate_name.as_ref() != Some(&"addr2line".to_string()) &&
+            sess.opts.crate_name.as_ref() != Some(&"std".to_string()) &&
+            sess.opts.crate_name.as_ref() != Some(&"gimli".to_string()) /* FIXME: just a hack */
+        // match (sess.opts.capstone.as_ref(), sess.opts.crate_name.as_ref()) {
+        //     (Some(c), Some(n)) => {
+        //         c == "*" || c == n
+        //     },
+        //     (Some(c), None) => c == "*",
+        //     _ => false
+        // }
     }
 
     fn run_pass(&self, tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
@@ -286,9 +329,8 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
 
         // This is to dynamically locate the rapture crate and not hard-code its definition index
 
-        let rapture_crate_number = *(tcx.crates(()).iter()
-            .find(|x| tcx.crate_name(**x).as_str() == "core")
-            .expect("Rapture crate not found."));
+        let rapture_crate_number = tcx.crates(()).iter()
+            .find(|x| tcx.crate_name(**x).as_str() == "core").cloned();
 
         first_pass(tcx, body, rapture_crate_number, &local_decls_clone);
 

@@ -101,7 +101,7 @@ pub fn borrow_ref<T>(r: &T) -> &T {
 #[stable(feature = "core_primitive", since = "1.43.0")]
 pub fn borrow_mut<T>(ptr: *mut T) -> *mut T {
     // CSBORROWMUT: .insn r 0x5b, 0x1, 0b1100, rd, rs1, x0;      rs1 = source capab, rd = destination capab
-    debug_print_ptr(core::ptr::null::<u64>().with_addr(0x44) as *mut u64);
+    // debug_print_ptr(core::ptr::null::<u64>().with_addr(0x44) as *mut u64);
     unsafe {
         let mut returned_ptr;
         asm!(
@@ -126,7 +126,7 @@ pub fn borrow_mut<T>(ptr: *mut T) -> *mut T {
 #[stable(feature = "core_primitive", since = "1.43.0")]
 pub fn borrow<T>(ptr: *mut T) -> *const T {
     // CSBORROW: .insn r 0x5b, 0x1, 0b1000, rd, rs1, x0;      rs1 = source capab, rd = destination capab
-    debug_print_ptr(core::ptr::null::<u64>() as *mut u64);
+    // debug_print_ptr(core::ptr::null::<u64>() as *mut u64);
     unsafe {
         let mut returned_ptr;
         asm!(
