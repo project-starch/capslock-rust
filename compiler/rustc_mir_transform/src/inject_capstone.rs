@@ -190,7 +190,6 @@ fn first_pass<'ctx>(tcx: TyCtxt<'ctx>, body: &mut Body<'ctx>,
                             Rvalue::AddressOf(mutability, place) => {
                                 // Seems that this only includes getting raw addresses?
                                 if !place.is_indirect_first_projection() || (*local_decls)[place.local].ty.is_ref() {
-                                    eprintln!("Bro yeah place {:?} type {:?} {:?}", place, lhs_type, lhs_type.peel_refs());
                                     match lhs_type.kind() {
                                         crate::ty::RawPtr(tm)=> {
                                             if tm.ty.is_sized(tcx, param_env) {
@@ -307,7 +306,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
         // }
 
         sess.target.arch == "riscv64" &&
-            sess.opts.crate_name.as_ref() != Some(&"alloc".to_string()) &&
+            // sess.opts.crate_name.as_ref() != Some(&"alloc".to_string()) &&
             // sess.opts.crate_name.as_ref() != Some(&"core".to_string()) &&
             sess.opts.crate_name.as_ref() != Some(&"hashbrown".to_string()) &&
             sess.opts.crate_name.as_ref() != Some(&"addr2line".to_string()) &&
