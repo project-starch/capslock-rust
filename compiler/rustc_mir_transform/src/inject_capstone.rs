@@ -3,7 +3,8 @@
 // use itertools::Itertools;
 // use std::collections::VecDeque;
 use rustc_middle::mir::patch::MirPatch;
-use crate::ty::{Ty, TyKind};
+use rustc_middle::ty::ty_kind::TyKind;
+use rustc_middle::ty::{TypeAndMut, Ty};
 use crate::{Spanned};
 use rustc_index::{IndexVec, IndexSlice};
 use rustc_middle::mir::*;
@@ -102,6 +103,14 @@ fn get_borrow_func_name(m: &Mutability, is_ref: bool, is_local: bool) -> &'stati
     }
 }
 
+fn get_pointee_type<'ctx>(ty : Ty<'ctx>) -> Option<Ty<'ctx>> {
+    match ty.kind() {
+        ty::RawPtr(TypeAndMut {ty : inner_ty, ..}) => Some(*inner_ty),
+        ty::Ref(_, inner_ty, _) => Some(*inner_ty),
+        _ => None
+    }
+}
+
 fn insert_borrow<'ctx>(tcx: TyCtxt<'ctx>, rapture_crate_number : Option<CrateNum>,
         patch: &mut MirPatch<'ctx>, bb: BasicBlock, data: &mut BasicBlockData<'ctx>, i: usize,
         mutability: &Mutability, lhs_type: Ty<'ctx>, lhs: &Place<'ctx>) {
@@ -120,7 +129,7 @@ fn insert_borrow<'ctx>(tcx: TyCtxt<'ctx>, rapture_crate_number : Option<CrateNum
         get_borrow_func_name(mutability, lhs_type.is_ref(), rapture_crate_number.is_none())
     ).expect("Unable to find function.");
 
-    let root_ty = lhs_type;
+    let root_ty = get_pointee_type(lhs_type).unwrap();
 
     // The generic argument that goes inside the <> brackets of the function call. This is why we obtained the root type
     let generic_arg = GenericArg::from(root_ty);
@@ -166,7 +175,8 @@ fn insert_borrow<'ctx>(tcx: TyCtxt<'ctx>, rapture_crate_number : Option<CrateNum
 
 fn first_pass<'ctx>(tcx: TyCtxt<'ctx>, body: &mut Body<'ctx>,
         rapture_crate_number : Option<CrateNum>, local_decls : &IndexVec<Local, LocalDecl<'ctx>>) {
-    if tcx.def_path_str(body.source.def_id()).contains("rapture") {
+    let func_path_str = tcx.def_path_str(body.source.def_id());
+    if func_path_str.contains("rapture") || func_path_str.contains("mem::uninitialized") {
         // we don't do this to rapture itself
         return;
     }
