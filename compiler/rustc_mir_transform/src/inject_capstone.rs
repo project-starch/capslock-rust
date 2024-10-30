@@ -180,6 +180,7 @@ fn first_pass<'ctx>(tcx: TyCtxt<'ctx>, body: &mut Body<'ctx>,
         // we don't do this to rapture itself
         return;
     }
+    // eprintln!("Inside function: {}", func_path_str);
     let param_env = tcx.param_env(body.source.def_id());
     loop {
         let mut patch = MirPatch::new(body);
@@ -199,17 +200,22 @@ fn first_pass<'ctx>(tcx: TyCtxt<'ctx>, body: &mut Body<'ctx>,
                             // Candidates: Cast, Ref, AdressOf. And technically Use as well, but that's just moving the same pointer around.
                             Rvalue::AddressOf(mutability, place) => {
                                 // Seems that this only includes getting raw addresses?
+                                // eprintln!("Address Of {:?} {:?}", lhs_type, (*local_decls)[place.local].ty);
                                 if !place.is_indirect_first_projection() || (*local_decls)[place.local].ty.is_ref() {
+                                    let r_ty = (*local_decls)[place.local].ty;
                                     match lhs_type.kind() {
-                                        crate::ty::RawPtr(tm)=> {
-                                            if tm.ty.is_sized(tcx, param_env) {
+                                        crate::ty::RawPtr(tm) => {
+                                            // if tm.ty.is_sized(tcx, param_env) {
                                                 // && lhs_type.peel_refs().is_sized(tcx, ParamEnv::reveal_all()) {
-                                                eprintln!("Ok this is the place {:?} type {:?} {:?}", place, lhs_type, lhs_type.peel_refs());
+                                                eprintln!("Ok this is the place {:?} type {:?} {:?}", place, lhs_type, r_ty);
+                                                if get_pointee_type(r_ty).is_some_and(|ty: Ty<'_>| ty.ty_adt_def().is_some_and(|adt| adt.is_unsafe_cell())) {
+                                                    eprintln!("Found Unsafe Cell {:?}", r_ty);
+                                                }
                                                 insert_borrow(tcx, rapture_crate_number, &mut patch, bb, data,
                                                     i, mutability, lhs_type, lhs);
                                                 _patch_empty = false;
                                                 break;
-                                            }
+                                            // }
                                         },
                                         _ => ()
                                     }
@@ -265,8 +271,8 @@ fn first_pass<'ctx>(tcx: TyCtxt<'ctx>, body: &mut Body<'ctx>,
                             Rvalue::Ref(_region, borrow_kind, place) => {
                                 // check if this is &*p where p is a raw pointer and of a sized type
                                 if place.is_indirect_first_projection() &&
-                                    (*local_decls)[place.local].ty.is_unsafe_ptr() &&
-                                    lhs_type.peel_refs().is_sized(tcx, param_env){
+                                    (*local_decls)[place.local].ty.is_unsafe_ptr() {
+                                    // lhs_type.peel_refs().is_sized(tcx, param_env){
                                     // println!("Ref {:?} = {:?}, lhs type peeled = {:?}", lhs_type, place, lhs_type.peel_refs());
                                     let mutability = match borrow_kind {
                                         BorrowKind::Mut { .. } => Mutability::Mut,

@@ -2,197 +2,117 @@ use crate::arch::asm;
 
 #[stable(feature = "core_primitive", since = "1.43.0")]
 pub fn create_capab_from_ptr_unsized<T>(ptr: *mut T, size : usize) -> *mut T where T : ?Sized {
-    let base = ptr as *const T as *const () as usize;
+    let base = ptr.addr();
     let top = base + size;
     unsafe {
-        let mut returned_ptr: *mut ();
+        let returned_addr: usize;
         asm!(
-            "mv t0, {base}",
-            "mv t1, {top}",
-            // ".insn r 0x5b, 0x1, 0x4, {returned_ptr}, t0, x2", // LCC
-            // ".insn r 0x5b, 0x1, 0x43, x0, {ptr}, x0", // PRINT -- just to test what the capab is before this call (for debugging purposes)
-            "mv t2, {ptr}",
-            ".insn r 0x5b, 0x1, 0x4, t3, t2, x8", // LCC
-            "bnez t3, 8f", // If t3 is not 0, that means it is 1, which means it is already a capab, and hence skip the GENCAP
-            ".insn r 0x5b, 0x1, 0x40, t2, t0, t1",  // GENCAP
+            ".insn r 0x5b, 0x1, 0x40, {addr}, {base}, {top}",  // GENCAP
             // "8: .insn r 0x5b, 0x1, 0x43, x0, t2, x0", // PRINT -- just to test what the capab is after this call (for debugging purposes)
-            "8: mv {returned_ptr}, t2",
-            // ".insn r 0x5b, 0x1, 0x43, x0, {returned_ptr}, x0", // PRINT -- just to test what the capab is after this call (for debugging purposes)
+            // ".insn r 0x5b, 0x1, 0x43, x0, {returned_addr}, x0", // PRINT -- just to test what the capab is after this call (for debugging purposes)
             base = in(reg) base,
             top = in(reg) top,
-            ptr = in(reg) ptr as *mut (),
-            returned_ptr = out(reg) returned_ptr,
-            // Clobber
-            out("t0") _,
-            out("t1") _,
-            out("t2") _,
-            out("t3") _,
+            addr = out(reg) returned_addr,
         );
-        ptr.with_addr(returned_ptr as usize)
-    }
-}
-
-/// Create a capability from a pointer
-#[stable(feature = "core_primitive", since = "1.43.0")]
-pub fn create_capab_from_ptr<T>(ptr: *mut T) -> *mut T {
-    let base = ptr as *const T as *const () as usize;
-    let top = base + crate::mem::size_of::<T>();
-    unsafe {
-        let mut returned_ptr: *mut T;
-        asm!(
-            "mv t0, {base}",
-            "mv t1, {top}",
-            // ".insn r 0x5b, 0x1, 0x4, {returned_ptr}, t0, x2", // LCC
-            // ".insn r 0x5b, 0x1, 0x43, x0, {ptr}, x0", // PRINT -- just to test what the capab is before this call (for debugging purposes)
-            "mv t2, {ptr}",
-            ".insn r 0x5b, 0x1, 0x40, t2, t0, t1",  // GENCAP
-            "mv {returned_ptr}, t2",
-            // ".insn r 0x5b, 0x1, 0x43, x0, {returned_ptr}, x0", // PRINT -- just to test what the capab is after this call (for debugging purposes)
-            base = in(reg) base,
-            top = in(reg) top,
-            ptr = in(reg) ptr,
-            returned_ptr = out(reg) returned_ptr,
-            // Clobber
-            out("t0") _,
-            out("t1") _,
-            out("t2") _,
-            out("t3") _,
-        );
-        returned_ptr
-    }
-}
-
-/// Create a capability from a reference
-#[stable(feature = "core_primitive", since = "1.43.0")]
-pub fn create_capab_from_ref<T>(ref_: &T) -> &mut T {
-    let ptr = ref_ as *const T as *mut T;
-    unsafe {
-        let returned_ptr = create_capab_from_ptr(ptr);
-        &mut *returned_ptr
-    }
-}
-
-
-/// Create a capability from a shared reference
-#[stable(feature = "core_primitive", since = "1.43.0")]
-pub fn create_capab_from_shared_ref<T>(ref_: &T) -> &T {
-    let ptr = ref_ as *const T as *mut T;
-    unsafe {
-        let returned_ptr = create_capab_from_ptr(ptr);
-        &*returned_ptr
+        ptr.with_addr(returned_addr)
     }
 }
 
 #[stable(feature = "core_primitive", since = "1.43.0")]
-pub fn borrow_mut_ref<T>(r: &mut T) -> &mut T {
+pub fn borrow_mut_ref<T>(r: &mut T) -> &mut T where T : ?Sized {
     unsafe { &mut *borrow_mut(r as *mut T) }
 }
 
 
 #[stable(feature = "core_primitive", since = "1.43.0")]
-pub fn borrow_ref<T>(r: &T) -> &T {
+pub fn borrow_ref<T>(r: &T) -> &T where T : ?Sized {
     unsafe { &*borrow(r as *const T as *mut T) }
 }
 
 /// Mutably borrow from a capability
 #[stable(feature = "core_primitive", since = "1.43.0")]
-pub fn borrow_mut<T>(ptr: *mut T) -> *mut T {
+pub fn borrow_mut<T>(ptr: *mut T) -> *mut T where T : ?Sized {
     // CSBORROWMUT: .insn r 0x5b, 0x1, 0b1100, rd, rs1, x0;      rs1 = source capab, rd = destination capab
     // debug_print_ptr(core::ptr::null::<u64>().with_addr(0x44) as *mut u64);
-    let size = crate::mem::size_of::<T>();
+    // let size = crate::mem::size_of::<T>();
+    let size = crate::mem::size_of_val(unsafe {&*ptr});
     unsafe {
-        let mut returned_ptr;
+        let addr = ptr.addr();
+        let returned_addr : usize;
         asm!(
-            // ".insn r 0x5b, 0x1, 0x43, x0, {ptr}, x0",           // PRINT -- to see what the source capab is before borrowing
-            ".insn r 0x5b, 0x1, 0x4, t0, {ptr}, x8",            // LCC -- to check that the source is indeed a capab
-            "beqz t0, 16f",                                      // If t0 is 0, that means it is not a capab, and hence skip the CSBORROWMUT
-            ".insn r 0x5b, 0x1, 0b1100, {returned_ptr}, {ptr}, {size}", // CSBORROWMUT
-            // ".insn r 0x5b, 0x1, 0x43, x0, {ptr}, x0",           // PRINT -- to see that the source capab has now changed
-            "j 8f",                                              // Skip the mv instruction in this case
-            "16: mv {returned_ptr}, {ptr}",                     // If it is not a capab, then just return the ptr as is
-            "8: nop",
-            returned_ptr = out(reg) returned_ptr,
-            ptr = in(reg) ptr,
+            ".insn r 0x5b, 0x1, 0b1100, {returned_addr}, {addr}, {size}", // CSBORROWMUT
+            returned_addr = out(reg) returned_addr,
+            addr = in(reg) addr,
             size = in(reg) size,
-            // Clobber
-            out("t0") _,
         );
-        returned_ptr
+        ptr.with_addr(returned_addr)
     }
 }
 
 /// Immutably borrow from a capability
 #[stable(feature = "core_primitive", since = "1.43.0")]
-pub fn borrow<T>(ptr: *mut T) -> *const T {
+pub fn borrow<T>(ptr: *mut T) -> *const T where T : ?Sized {
     // CSBORROW: .insn r 0x5b, 0x1, 0b1000, rd, rs1, x0;      rs1 = source capab, rd = destination capab
     // debug_print_ptr(core::ptr::null::<u64>() as *mut u64);
-    let size = crate::mem::size_of::<T>();
+    // let size = crate::mem::size_of::<T>();
+    let size = crate::mem::size_of_val(unsafe {&*ptr});
     unsafe {
-        let mut returned_ptr;
+        let addr = ptr.addr();
+        let returned_addr : usize;
         asm!(
-            // ".insn r 0x5b, 0x1, 0x43, x0, {ptr}, x0",           // PRINT -- to see what the source capab is before borrowing
-            ".insn r 0x5b, 0x1, 0x4, t0, {ptr}, x8",            // LCC -- to check that the source is indeed a capab
-            "beqz t0, 16f",                                      // If t0 is 0, that means it is not a capab, and hence skip the CSBORROW
-            ".insn r 0x5b, 0x1, 0b1000, {returned_ptr}, {ptr}, {size}", // CSBORROW
-            // ".insn r 0x5b, 0x1, 0x43, x0, {ptr}, x0",           // PRINT -- to see that the source capab has now changed
-            "j 8f",                                              // Skip the mv instruction in this case
-            "16: mv {returned_ptr}, {ptr}",                     // If it is not a capab, then just return the ptr as is
-            "8: nop",
-            returned_ptr = out(reg) returned_ptr,
-            ptr = in(reg) ptr,
+            // ".insn r 0x5b, 0x1, 0x43, x0, {addr}, x0",           // PRINT -- to see what the source capab is before borrowing
+            ".insn r 0x5b, 0x1, 0b1000, {returned_addr}, {addr}, {size}", // CSBORROW
+            returned_addr = out(reg) returned_addr,
+            addr = in(reg) addr,
             size = in(reg) size,
-            // Clobber
-            out("t0") _,
         );
-        returned_ptr
+        ptr.with_addr(returned_addr)
     }
 }
 
 /// Convert a capability into a raw pointer (if it is a capability)
 #[stable(feature = "core_primitive", since = "1.43.0")]
-pub fn scrub<T>(ptr: *mut T) -> *mut T {
-    let mut returned_ptr : *mut T;
+pub fn scrub<T>(ptr: *mut T) -> *mut T where T : ?Sized {
+    let returned_addr : usize;
     unsafe {
+        let addr = ptr.addr();
         asm!(
-            ".insn r 0x5b, 0x1, 0x4, t0, {ptr}, x8",
-            "mv {returned_ptr}, {ptr}",
-            "beqz t0, 1f",
-            ".insn r 0x5b, 0x1, 0x4, {returned_ptr}, {ptr}, x2",
-            "1: nop",
-            returned_ptr = out(reg) returned_ptr,
-            ptr = in(reg) ptr,
-            out("t0") _
+            ".insn r 0x5b, 0x1, 0x4, {returned_addr}, {addr}, x2",
+            returned_addr = out(reg) returned_addr,
+            addr = in(reg) addr,
         );
     }
-    returned_ptr
+    ptr.with_addr(returned_addr)
 }
 
 /// Invalidate a capability
 #[stable(feature = "core_primitive", since = "1.43.0")]
-pub fn invalidate<T>(ptr: *mut T) {
+pub fn invalidate<T>(ptr: *mut T) where T : ?Sized {
     // csdrop            0001011 .....    ..... 001 ..... 1011011 @r
     unsafe {
+        let addr = ptr.addr();
         asm!(
-            // ".insn r 0x5b, 0x1, 0x43, x0, {ptr}, x0",           // PRINT -- seeing the capab before revoking
-            // ".insn r 0x5b, 0x1, 0x4, t0, {ptr}, x8",            // LCC -- to check that the source is indeed a capab
+            // ".insn r 0x5b, 0x1, 0x43, x0, {addr}, x0",           // PRINT -- seeing the capab before revoking
+            // ".insn r 0x5b, 0x1, 0x4, t0, {addr}, x8",            // LCC -- to check that the source is indeed a capab
             // "beqz t0, 12f",                                      // If t0 is 0, that means it is not a capab, and hence skip the DROP
-            ".insn r 0x5b, 0b001, 0b0001011, x0, {ptr}, x0",    // DROP
-            // ".insn r 0x5b, 0x1, 0x43, x0, {ptr}, x0",           // PRINT -- testing that revoke happened; this PRINT only happens if the revoke happened
+            ".insn r 0x5b, 0b001, 0b0001011, x0, {addr}, x0",    // DROP
+            // ".insn r 0x5b, 0x1, 0x43, x0, {addr}, x0",           // PRINT -- testing that revoke happened; this PRINT only happens if the revoke happened
             // "12:",                                             // Label for skipping the DROP
-            ptr = in(reg) ptr,
+            addr = in(reg) addr,
         );
     }
 }
 
 /// Prints debug info about a capability
 #[stable(feature = "core_primitive", since = "1.43.0")]
-pub fn debug_print_ptr<T>(ptr: *mut T) {
+pub fn debug_print_ptr<T>(ptr: *mut T) where T : ?Sized {
     unsafe {
+        let addr = ptr.addr();
         asm!(
-            ".insn r 0x5b, 0x1, 0x4, t3, {ptr}, x8", // LCC
-            ".insn r 0x5b, 0x1, 0x43, x0, {ptr}, x0",           // PRINT - Raw value of the ptr ".insn r 0x5b, 0x1, 0x43, x0, t3, x0",           // PRINT - Is it a capab?
-            // "lb t0, 0({ptr})",                                 // Load the first byte using the capab
-            ptr = in(reg) ptr,
+            ".insn r 0x5b, 0x1, 0x4, t3, {addr}, x8", // LCC
+            ".insn r 0x5b, 0x1, 0x43, x0, {addr}, x0",           // PRINT - Raw value of the addr ".insn r 0x5b, 0x1, 0x43, x0, t3, x0",           // PRINT - Is it a capab?
+            // "lb t0, 0({addr})",                                 // Load the first byte using the capab
+            addr = in(reg) addr,
             // Clobber
             out("t3") _,
         );
