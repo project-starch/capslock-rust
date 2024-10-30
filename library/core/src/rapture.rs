@@ -19,46 +19,54 @@ pub fn create_capab_from_ptr_unsized<T>(ptr: *mut T, size : usize) -> *mut T whe
 }
 
 #[stable(feature = "core_primitive", since = "1.43.0")]
-pub fn borrow_mut_ref<T>(r: &mut T) -> &mut T where T : ?Sized {
-    unsafe { &mut *borrow_mut(r as *mut T) }
+pub fn borrow_mut_ref<T>(r: &mut T, is_unsafe_cell : bool) -> &mut T where T : ?Sized {
+    unsafe { &mut *borrow_mut(r as *mut T, is_unsafe_cell) }
 }
 
 
 #[stable(feature = "core_primitive", since = "1.43.0")]
-pub fn borrow_ref<T>(r: &T) -> &T where T : ?Sized {
-    unsafe { &*borrow(r as *const T as *mut T) }
+pub fn borrow_ref<T>(r: &T, is_unsafe_cell : bool) -> &T where T : ?Sized {
+    unsafe { &*borrow(r as *const T as *mut T, is_unsafe_cell) }
 }
 
 /// Mutably borrow from a capability
 #[stable(feature = "core_primitive", since = "1.43.0")]
-pub fn borrow_mut<T>(ptr: *mut T) -> *mut T where T : ?Sized {
+pub fn borrow_mut<T>(ptr: *mut T, is_unsafe_cell : bool) -> *mut T where T : ?Sized {
     // CSBORROWMUT: .insn r 0x5b, 0x1, 0b1100, rd, rs1, x0;      rs1 = source capab, rd = destination capab
     // debug_print_ptr(core::ptr::null::<u64>().with_addr(0x44) as *mut u64);
     // let size = crate::mem::size_of::<T>();
     let size = crate::mem::size_of_val(unsafe {&*ptr});
+    let returned_addr : usize;
     unsafe {
         let addr = ptr.addr();
-        let returned_addr : usize;
         asm!(
             ".insn r 0x5b, 0x1, 0b1100, {returned_addr}, {addr}, {size}", // CSBORROWMUT
             returned_addr = out(reg) returned_addr,
             addr = in(reg) addr,
             size = in(reg) size,
         );
-        ptr.with_addr(returned_addr)
     }
+    if is_unsafe_cell {
+        unsafe {
+            asm!(
+                ".insn r 0x5b, 0x1, 0b1101, x0, {addr}, x0",
+                addr = in(reg) returned_addr,
+            );
+        }
+    }
+    ptr.with_addr(returned_addr)
 }
 
 /// Immutably borrow from a capability
 #[stable(feature = "core_primitive", since = "1.43.0")]
-pub fn borrow<T>(ptr: *mut T) -> *const T where T : ?Sized {
+pub fn borrow<T>(ptr: *mut T, is_unsafe_cell : bool) -> *const T where T : ?Sized {
     // CSBORROW: .insn r 0x5b, 0x1, 0b1000, rd, rs1, x0;      rs1 = source capab, rd = destination capab
     // debug_print_ptr(core::ptr::null::<u64>() as *mut u64);
     // let size = crate::mem::size_of::<T>();
     let size = crate::mem::size_of_val(unsafe {&*ptr});
+    let returned_addr : usize;
     unsafe {
         let addr = ptr.addr();
-        let returned_addr : usize;
         asm!(
             // ".insn r 0x5b, 0x1, 0x43, x0, {addr}, x0",           // PRINT -- to see what the source capab is before borrowing
             ".insn r 0x5b, 0x1, 0b1000, {returned_addr}, {addr}, {size}", // CSBORROW
@@ -66,8 +74,16 @@ pub fn borrow<T>(ptr: *mut T) -> *const T where T : ?Sized {
             addr = in(reg) addr,
             size = in(reg) size,
         );
-        ptr.with_addr(returned_addr)
     }
+    if is_unsafe_cell {
+        unsafe {
+            asm!(
+                ".insn r 0x5b, 0x1, 0b1101, x0, {addr}, x0",
+                addr = in(reg) returned_addr,
+            );
+        }
+    }
+    ptr.with_addr(returned_addr)
 }
 
 /// Convert a capability into a raw pointer (if it is a capability)

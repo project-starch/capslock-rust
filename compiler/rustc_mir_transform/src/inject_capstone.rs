@@ -1,5 +1,6 @@
 #![allow(unused)]
 
+use interpret::Scalar;
 // use itertools::Itertools;
 // use std::collections::VecDeque;
 use rustc_middle::mir::patch::MirPatch;
@@ -113,7 +114,7 @@ fn get_pointee_type<'ctx>(ty : Ty<'ctx>) -> Option<Ty<'ctx>> {
 
 fn insert_borrow<'ctx>(tcx: TyCtxt<'ctx>, rapture_crate_number : Option<CrateNum>,
         patch: &mut MirPatch<'ctx>, bb: BasicBlock, data: &mut BasicBlockData<'ctx>, i: usize,
-        mutability: &Mutability, lhs_type: Ty<'ctx>, lhs: &Place<'ctx>) {
+        mutability: &Mutability, lhs_type: Ty<'ctx>, lhs: &Place<'ctx>, is_unsafe_cell : bool) {
     // Shift all the statements beyond our target statement to a new vector and clear them from the original block
     let new_stmts = data.statements.split_off(i + 1);
 
@@ -149,6 +150,9 @@ fn insert_borrow<'ctx>(tcx: TyCtxt<'ctx>, rapture_crate_number : Option<CrateNum
     let operand_input = Operand::Copy(Place {local: lhs.local, projection: List::empty()});
     let spanned_operand = Spanned { span: SPANS[0], node: operand_input };
 
+    let operand_is_unsafe_cell = Operand::const_from_scalar(tcx, Ty::new(tcx, ty::Bool), Scalar::from_bool(is_unsafe_cell), SPANS[0]);
+    let spanned_operand_is_unsafe_cell = Spanned { span: SPANS[0], node: operand_is_unsafe_cell };
+
     // println!("Spanned Operand: {:?}", spanned_operand);   // This is the actual argument
 
     let unwind_action = if data.is_cleanup {
@@ -161,7 +165,7 @@ fn insert_borrow<'ctx>(tcx: TyCtxt<'ctx>, rapture_crate_number : Option<CrateNum
     // Create a block terminator that will execute the function call we want to inject. This terminator points from current block to our intermediary block
     let intermediary_terminator = TerminatorKind::Call {
         func: operand_,
-        args: vec![spanned_operand],
+        args: vec![spanned_operand, spanned_operand_is_unsafe_cell],
         destination: dest_place,
         target: Some(borrow_block),
         unwind: unwind_action,
@@ -208,11 +212,13 @@ fn first_pass<'ctx>(tcx: TyCtxt<'ctx>, body: &mut Body<'ctx>,
                                             // if tm.ty.is_sized(tcx, param_env) {
                                                 // && lhs_type.peel_refs().is_sized(tcx, ParamEnv::reveal_all()) {
                                                 eprintln!("Ok this is the place {:?} type {:?} {:?}", place, lhs_type, r_ty);
-                                                if get_pointee_type(r_ty).is_some_and(|ty: Ty<'_>| ty.ty_adt_def().is_some_and(|adt| adt.is_unsafe_cell())) {
+                                                let is_unsafe_cell = get_pointee_type(r_ty)
+                                                    .is_some_and(|ty: Ty<'_>| ty.ty_adt_def().is_some_and(|adt| adt.is_unsafe_cell())) ;
+                                                if is_unsafe_cell {
                                                     eprintln!("Found Unsafe Cell {:?}", r_ty);
                                                 }
                                                 insert_borrow(tcx, rapture_crate_number, &mut patch, bb, data,
-                                                    i, mutability, lhs_type, lhs);
+                                                    i, mutability, lhs_type, lhs, is_unsafe_cell);
                                                 _patch_empty = false;
                                                 break;
                                             // }
@@ -279,7 +285,7 @@ fn first_pass<'ctx>(tcx: TyCtxt<'ctx>, body: &mut Body<'ctx>,
                                         _ => Mutability::Not
                                     };
                                     insert_borrow(tcx, rapture_crate_number, &mut patch, bb, data, i,
-                                        &mutability, lhs_type, lhs);
+                                        &mutability, lhs_type, lhs, false);
                                     _patch_empty = false;
                                     break;
                                 }
