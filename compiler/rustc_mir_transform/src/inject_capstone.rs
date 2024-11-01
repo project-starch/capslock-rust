@@ -114,7 +114,8 @@ fn get_pointee_type<'ctx>(ty : Ty<'ctx>) -> Option<Ty<'ctx>> {
 
 fn insert_borrow<'ctx>(tcx: TyCtxt<'ctx>, rapture_crate_number : Option<CrateNum>,
         patch: &mut MirPatch<'ctx>, bb: BasicBlock, data: &mut BasicBlockData<'ctx>, i: usize,
-        mutability: &Mutability, lhs_type: Ty<'ctx>, lhs: &Place<'ctx>, is_unsafe_cell : bool) {
+        mutability: &Mutability, lhs_type: Ty<'ctx>, lhs: &Place<'ctx>, is_unsafe_cell : bool,
+        is_foreign : bool) {
     // Shift all the statements beyond our target statement to a new vector and clear them from the original block
     let new_stmts = data.statements.split_off(i + 1);
 
@@ -153,6 +154,9 @@ fn insert_borrow<'ctx>(tcx: TyCtxt<'ctx>, rapture_crate_number : Option<CrateNum
     let operand_is_unsafe_cell = Operand::const_from_scalar(tcx, Ty::new(tcx, ty::Bool), Scalar::from_bool(is_unsafe_cell), SPANS[0]);
     let spanned_operand_is_unsafe_cell = Spanned { span: SPANS[0], node: operand_is_unsafe_cell };
 
+    let operand_is_foreign = Operand::const_from_scalar(tcx, Ty::new(tcx, ty::Bool), Scalar::from_bool(is_foreign), SPANS[0]);
+    let spanned_operand_is_foreign = Spanned { span: SPANS[0], node: operand_is_foreign };
+
     // println!("Spanned Operand: {:?}", spanned_operand);   // This is the actual argument
 
     let unwind_action = if data.is_cleanup {
@@ -165,7 +169,7 @@ fn insert_borrow<'ctx>(tcx: TyCtxt<'ctx>, rapture_crate_number : Option<CrateNum
     // Create a block terminator that will execute the function call we want to inject. This terminator points from current block to our intermediary block
     let intermediary_terminator = TerminatorKind::Call {
         func: operand_,
-        args: vec![spanned_operand, spanned_operand_is_unsafe_cell],
+        args: vec![spanned_operand, spanned_operand_is_unsafe_cell, spanned_operand_is_foreign],
         destination: dest_place,
         target: Some(borrow_block),
         unwind: unwind_action,
@@ -217,8 +221,12 @@ fn first_pass<'ctx>(tcx: TyCtxt<'ctx>, body: &mut Body<'ctx>,
                                                 if is_unsafe_cell {
                                                     eprintln!("Found Unsafe Cell {:?}", r_ty);
                                                 }
+                                                let is_foreign = get_pointee_type(r_ty)
+                                                    .is_some_and(|ty| matches!(ty.kind(), &ty::Foreign(_)));
+                                                // insert_borrow(tcx, rapture_crate_number, &mut patch, bb, data,
+                                                    // i, mutability, lhs_type, lhs, is_unsafe_cell);
                                                 insert_borrow(tcx, rapture_crate_number, &mut patch, bb, data,
-                                                    i, mutability, lhs_type, lhs, is_unsafe_cell);
+                                                    i, mutability, lhs_type, lhs, true, is_foreign); // treat all raw pointers as UnsafeCell
                                                 _patch_empty = false;
                                                 break;
                                             // }
@@ -280,12 +288,14 @@ fn first_pass<'ctx>(tcx: TyCtxt<'ctx>, body: &mut Body<'ctx>,
                                     (*local_decls)[place.local].ty.is_unsafe_ptr() {
                                     // lhs_type.peel_refs().is_sized(tcx, param_env){
                                     // println!("Ref {:?} = {:?}, lhs type peeled = {:?}", lhs_type, place, lhs_type.peel_refs());
+                                    let is_foreign = get_pointee_type(lhs_type)
+                                        .is_some_and(|ty| matches!(ty.kind(), &ty::Foreign(_)));
                                     let mutability = match borrow_kind {
                                         BorrowKind::Mut { .. } => Mutability::Mut,
                                         _ => Mutability::Not
                                     };
                                     insert_borrow(tcx, rapture_crate_number, &mut patch, bb, data, i,
-                                        &mutability, lhs_type, lhs, false);
+                                        &mutability, lhs_type, lhs, false, is_foreign);
                                     _patch_empty = false;
                                     break;
                                 }
