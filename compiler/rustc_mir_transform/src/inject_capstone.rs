@@ -171,6 +171,17 @@ fn insert_borrow<'ctx>(tcx: TyCtxt<'ctx>, rapture_crate_number : Option<CrateNum
         is_foreign : bool) {
     eprintln!("Insert borrow (UnsafeCell = {}, Foreign = {}): {:?}", is_unsafe_cell, is_foreign, lhs_type);
 
+    let pointer_type : u8 = match lhs_type.kind() {
+        crate::ty::RawPtr(tm) => {
+            if is_unsafe_cell {
+                2 // unafe cell
+            } else {
+                1 // plain raw pointer
+            }
+        }
+        _ => 0 // reference
+    };
+
     let func = get_func_def_id(tcx, rapture_crate_number,
         get_borrow_func_name(mutability, lhs_type.is_ref(), rapture_crate_number.is_none())
     ).expect("Unable to find function.");
@@ -183,12 +194,12 @@ fn insert_borrow<'ctx>(tcx: TyCtxt<'ctx>, rapture_crate_number : Option<CrateNum
     let operand_input = Operand::Copy(Place {local: lhs.local, projection: List::empty()});
     let spanned_operand = Spanned { span: SPANS[0], node: operand_input };
 
-    let operand_is_unsafe_cell = Operand::const_from_scalar(tcx, Ty::new(tcx, ty::Bool), Scalar::from_bool(is_unsafe_cell), SPANS[0]);
-    let spanned_operand_is_unsafe_cell = Spanned { span: SPANS[0], node: operand_is_unsafe_cell };
+    let operand_pointer_type = Operand::const_from_scalar(tcx, Ty::new(tcx, ty::Uint(ty::UintTy::U8)), Scalar::from_u8(pointer_type), SPANS[0]);
+    let spanned_operand_pointer_type = Spanned { span: SPANS[0], node: operand_pointer_type };
 
     let operand_is_foreign = Operand::const_from_scalar(tcx, Ty::new(tcx, ty::Bool), Scalar::from_bool(is_foreign), SPANS[0]);
     let spanned_operand_is_foreign = Spanned { span: SPANS[0], node: operand_is_foreign };
-    let args = vec![spanned_operand, spanned_operand_is_unsafe_cell, spanned_operand_is_foreign];
+    let args = vec![spanned_operand, spanned_operand_pointer_type, spanned_operand_is_foreign];
 
     insert_call(tcx, func, &[generic_arg], args, patch, bb, data, i, lhs)
 }
@@ -266,13 +277,13 @@ fn first_pass<'ctx>(tcx: TyCtxt<'ctx>, body: &mut Body<'ctx>,
                                 // Seems that this only includes getting raw addresses?
                                 // eprintln!("Address Of {:?} {:?}", lhs_type, (*local_decls)[place.local].ty);
                                 // if !place.is_indirect_first_projection() || (*local_decls)[place.local].ty.is_ref() {
-                                //     let r_ty = (*local_decls)[place.local].ty;
+                                    let r_ty = (*local_decls)[place.local].ty;
                                     match lhs_type.kind() {
                                         crate::ty::RawPtr(tm) => {
                                             // if tm.ty.is_sized(tcx, param_env) {
                                                 // && lhs_type.peel_refs().is_sized(tcx, ParamEnv::reveal_all()) {
-                                                // let is_unsafe_cell = get_pointee_type(r_ty)
-                                                //     .is_some_and(|ty: Ty<'_>| ty.ty_adt_def().is_some_and(|adt| adt.is_unsafe_cell())) ;
+                                                let is_unsafe_cell = get_pointee_type(r_ty)
+                                                    .is_some_and(|ty: Ty<'_>| ty.ty_adt_def().is_some_and(|adt| adt.is_unsafe_cell())) ;
                                                 // if is_unsafe_cell {
                                                 //     eprintln!("Found Unsafe Cell {:?}", r_ty);
                                                 // }
@@ -281,7 +292,7 @@ fn first_pass<'ctx>(tcx: TyCtxt<'ctx>, body: &mut Body<'ctx>,
                                                 // insert_borrow(tcx, rapture_crate_number, &mut patch, bb, data,
                                                     // i, mutability, lhs_type, lhs, is_unsafe_cell);
                                                 insert_borrow(tcx, rapture_crate_number, &mut patch, bb, data,
-                                                    i, mutability, lhs_type, lhs, true, is_foreign); // treat all raw pointers as UnsafeCell
+                                                    i, mutability, lhs_type, lhs, is_unsafe_cell, is_foreign); // treat all raw pointers as UnsafeCell
                                                 _patch_empty = false;
                                                 break;
                                             // }
