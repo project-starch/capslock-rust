@@ -20,6 +20,37 @@ pub fn create_capab_from_ptr_unsized<T>(ptr: *mut T, size : usize) -> *mut T whe
 }
 
 #[stable(feature = "core_primitive", since = "1.43.0")]
+pub fn shrink<T>(ptr: *const T, is_foreign : bool) -> *const T where T : ?Sized {
+    let size = if is_foreign { 0 } else { crate::mem::size_of_val(unsafe {&*ptr}) };
+    let returned_addr : usize;
+    unsafe {
+        let addr = ptr.addr();
+        asm!(
+            ".insn r 0x5b, 0x1, 0b1, {returned_addr}, {addr}, {size}", // CSBORROWMUT
+            returned_addr = out(reg) returned_addr,
+            addr = in(reg) addr,
+            size = in(reg) size,
+        );
+    }
+    ptr.with_addr(returned_addr)
+}
+
+#[stable(feature = "core_primitive", since = "1.43.0")]
+pub fn shrink_mut<T>(ptr: *mut T, is_foreign : bool) -> *mut T where T : ?Sized {
+    shrink(ptr as *const T, is_foreign) as *mut T
+}
+
+#[stable(feature = "core_primitive", since = "1.43.0")]
+pub fn shrink_mut_ref<T>(r: &mut T, is_foreign : bool) -> &mut T where T : ?Sized {
+    unsafe { &mut *shrink_mut(r as *mut T, is_foreign) }
+}
+
+#[stable(feature = "core_primitive", since = "1.43.0")]
+pub fn shrink_ref<T>(r: &T, is_foreign : bool) -> &T where T : ?Sized {
+    unsafe { &*shrink(r as *const T, is_foreign) }
+}
+
+#[stable(feature = "core_primitive", since = "1.43.0")]
 pub fn borrow_mut_ref<T>(r: &mut T, is_unsafe_cell : bool, is_foreign : bool) -> &mut T where T : ?Sized {
     unsafe { &mut *borrow_mut(r as *mut T, is_unsafe_cell, is_foreign) }
 }

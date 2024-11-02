@@ -86,6 +86,67 @@ fn get_func_def_id<'ctx>(tcx: TyCtxt<'ctx>, crate_num_opt: Option<CrateNum>, fun
     }
 }
 
+fn get_pointee_type<'ctx>(ty : Ty<'ctx>) -> Option<Ty<'ctx>> {
+    match ty.kind() {
+        ty::RawPtr(TypeAndMut {ty : inner_ty, ..}) => Some(*inner_ty),
+        ty::Ref(_, inner_ty, _) => Some(*inner_ty),
+        _ => None
+    }
+}
+
+fn insert_call<'ctx>(tcx: TyCtxt<'ctx>, func: DefId, generic_args: &[GenericArg<'ctx>], args: Vec<Spanned<Operand<'ctx>>>,
+        patch: &mut MirPatch<'ctx>, bb: BasicBlock, data: &mut BasicBlockData<'ctx>, i: usize,
+        lhs: &Place<'ctx>) {
+    // Shift all the statements beyond our target statement to a new vector and clear them from the original block
+    let new_stmts = data.statements.split_off(i + 1);
+
+    // let unwind_action = data.terminator.as_ref().unwrap().unwind().unwrap().clone();
+    // let unwind_action = if data.is_cleanup {
+    //     UnwindAction::Terminate(UnwindTerminateReason::InCleanup)
+    // }
+    // else {
+    let unwind_action = UnwindAction::Terminate(UnwindTerminateReason::Abi);
+    // };
+
+    // Create an intermediary block that will be inserted between the current block and the next block
+    // This block has to point to the next block in the control flow graph (that terminator is an Option type)
+    let block = patch.new_block(BasicBlockData {
+        statements: new_stmts.clone(),
+        terminator: Some(data.terminator.as_ref().unwrap().clone()),
+        is_cleanup: data.is_cleanup.clone(),
+    });
+
+    let def_id = func;
+
+    let generic_args = tcx.mk_args(generic_args);
+
+    // Creating the sugar of all the structures for the function type to be injected
+    let ty_ = Ty::new(tcx, ty::FnDef(def_id, generic_args));
+    let const_ = Const::Val(ConstValue::ZeroSized, ty_);
+    let const_operand = Box::new(ConstOperand { span: SPANS[0], user_ty: None, const_: const_ });
+    let operand_ = Operand::Constant(const_operand);
+
+    // println!("Operand: {:?}", operand_);    // The function is uniquely denoted by an Operand type; this is not to be confused with the arguments to the function
+
+    let dest_place = Place {local: (lhs.local).into(), projection: List::empty()};  // Every function has to have a target place where it will store its return value
+    // println!("Spanned Operand: {:?}", spanned_operand);   // This is the actual argument
+
+
+    // Create a block terminator that will execute the function call we want to inject. This terminator points from current block to our intermediary block
+    let intermediary_terminator = TerminatorKind::Call {
+        func: operand_,
+        args: args,
+        destination: dest_place,
+        target: Some(block),
+        unwind: unwind_action,
+        call_source: CallSource::Normal,
+        fn_span: SPANS[0],
+    };
+
+    patch.patch_terminator(bb, intermediary_terminator);
+}
+
+
 fn get_borrow_func_name(m: &Mutability, is_ref: bool, is_local: bool) -> &'static str {
     if is_local {
         match (*m, is_ref) {
@@ -104,48 +165,19 @@ fn get_borrow_func_name(m: &Mutability, is_ref: bool, is_local: bool) -> &'stati
     }
 }
 
-fn get_pointee_type<'ctx>(ty : Ty<'ctx>) -> Option<Ty<'ctx>> {
-    match ty.kind() {
-        ty::RawPtr(TypeAndMut {ty : inner_ty, ..}) => Some(*inner_ty),
-        ty::Ref(_, inner_ty, _) => Some(*inner_ty),
-        _ => None
-    }
-}
-
 fn insert_borrow<'ctx>(tcx: TyCtxt<'ctx>, rapture_crate_number : Option<CrateNum>,
         patch: &mut MirPatch<'ctx>, bb: BasicBlock, data: &mut BasicBlockData<'ctx>, i: usize,
         mutability: &Mutability, lhs_type: Ty<'ctx>, lhs: &Place<'ctx>, is_unsafe_cell : bool,
         is_foreign : bool) {
-    // Shift all the statements beyond our target statement to a new vector and clear them from the original block
-    let new_stmts = data.statements.split_off(i + 1);
+    eprintln!("Insert borrow (UnsafeCell = {}, Foreign = {}): {:?}", is_unsafe_cell, is_foreign, lhs_type);
 
-    // Create an intermediary block that will be inserted between the current block and the next block
-    // This block has to point to the next block in the control flow graph (that terminator is an Option type)
-    let borrow_block = patch.new_block(BasicBlockData {
-        statements: new_stmts.clone(),
-        terminator: Some(data.terminator.as_ref().unwrap().clone()),
-        is_cleanup: data.is_cleanup.clone(),
-    });
-
-    let def_id = get_func_def_id(tcx, rapture_crate_number,
+    let func = get_func_def_id(tcx, rapture_crate_number,
         get_borrow_func_name(mutability, lhs_type.is_ref(), rapture_crate_number.is_none())
     ).expect("Unable to find function.");
 
     let root_ty = get_pointee_type(lhs_type).unwrap();
-
     // The generic argument that goes inside the <> brackets of the function call. This is why we obtained the root type
     let generic_arg = GenericArg::from(root_ty);
-    let generic_args = tcx.mk_args(&[generic_arg]);
-
-    // Creating the sugar of all the structures for the function type to be injected
-    let ty_ = Ty::new(tcx, ty::FnDef(def_id, generic_args));
-    let const_ = Const::Val(ConstValue::ZeroSized, ty_);
-    let const_operand = Box::new(ConstOperand { span: SPANS[0], user_ty: None, const_: const_ });
-    let operand_ = Operand::Constant(const_operand);
-
-    // println!("Operand: {:?}", operand_);    // The function is uniquely denoted by an Operand type; this is not to be confused with the arguments to the function
-
-    let dest_place = Place {local: (lhs.local).into(), projection: List::empty()};  // Every function has to have a target place where it will store its return value
 
     // This is how we create the arguments to be passed to the function that we are calling
     let operand_input = Operand::Copy(Place {local: lhs.local, projection: List::empty()});
@@ -156,28 +188,52 @@ fn insert_borrow<'ctx>(tcx: TyCtxt<'ctx>, rapture_crate_number : Option<CrateNum
 
     let operand_is_foreign = Operand::const_from_scalar(tcx, Ty::new(tcx, ty::Bool), Scalar::from_bool(is_foreign), SPANS[0]);
     let spanned_operand_is_foreign = Spanned { span: SPANS[0], node: operand_is_foreign };
+    let args = vec![spanned_operand, spanned_operand_is_unsafe_cell, spanned_operand_is_foreign];
 
-    // println!("Spanned Operand: {:?}", spanned_operand);   // This is the actual argument
+    insert_call(tcx, func, &[generic_arg], args, patch, bb, data, i, lhs)
+}
 
-    let unwind_action = if data.is_cleanup {
-        UnwindAction::Terminate(UnwindTerminateReason::InCleanup)
+fn get_shrink_func_name(m: &Mutability, is_ref: bool, is_local: bool) -> &'static str {
+    if is_local {
+        match (*m, is_ref) {
+            (Mutability::Mut, false) => "rapture::shrink_mut",
+            (Mutability::Not, false) => "rapture::shrink",
+            (Mutability::Mut, true) => "rapture::shrink_mut_ref",
+            (Mutability::Not, true) => "rapture::shrink_ref",
+        }
+    } else {
+        match (*m, is_ref) {
+            (Mutability::Mut, false) => "rapture::shrink_mut",
+            (Mutability::Not, false) => "rapture::shrink",
+            (Mutability::Mut, true) => "rapture::shrink_mut_ref",
+            (Mutability::Not, true) => "rapture::shrink_ref",
+        }
     }
-    else {
-        UnwindAction::Continue
-    };
+}
 
-    // Create a block terminator that will execute the function call we want to inject. This terminator points from current block to our intermediary block
-    let intermediary_terminator = TerminatorKind::Call {
-        func: operand_,
-        args: vec![spanned_operand, spanned_operand_is_unsafe_cell, spanned_operand_is_foreign],
-        destination: dest_place,
-        target: Some(borrow_block),
-        unwind: unwind_action,
-        call_source: CallSource::Normal,
-        fn_span: SPANS[0],
-    };
 
-    patch.patch_terminator(bb, intermediary_terminator);
+fn insert_shrink<'ctx>(tcx: TyCtxt<'ctx>, rapture_crate_number : Option<CrateNum>,
+        patch: &mut MirPatch<'ctx>, bb: BasicBlock, data: &mut BasicBlockData<'ctx>, i: usize,
+        mutability: &Mutability, lhs_type: Ty<'ctx>, lhs: &Place<'ctx>,
+        is_foreign : bool) {
+
+    let func = get_func_def_id(tcx, rapture_crate_number,
+        get_shrink_func_name(mutability, lhs_type.is_ref(), rapture_crate_number.is_none())
+    ).expect("Unable to find function.");
+
+    let root_ty = get_pointee_type(lhs_type).unwrap();
+    // The generic argument that goes inside the <> brackets of the function call. This is why we obtained the root type
+    let generic_arg = GenericArg::from(root_ty);
+
+    // This is how we create the arguments to be passed to the function that we are calling
+    let operand_input = Operand::Copy(Place {local: lhs.local, projection: List::empty()});
+    let spanned_operand = Spanned { span: SPANS[0], node: operand_input };
+
+    let operand_is_foreign = Operand::const_from_scalar(tcx, Ty::new(tcx, ty::Bool), Scalar::from_bool(is_foreign), SPANS[0]);
+    let spanned_operand_is_foreign = Spanned { span: SPANS[0], node: operand_is_foreign };
+    let args = vec![spanned_operand, spanned_operand_is_foreign];
+
+    insert_call(tcx, func, &[generic_arg], args, patch, bb, data, i, lhs)
 }
 
 
@@ -209,19 +265,18 @@ fn first_pass<'ctx>(tcx: TyCtxt<'ctx>, body: &mut Body<'ctx>,
                             Rvalue::AddressOf(mutability, place) => {
                                 // Seems that this only includes getting raw addresses?
                                 // eprintln!("Address Of {:?} {:?}", lhs_type, (*local_decls)[place.local].ty);
-                                if !place.is_indirect_first_projection() || (*local_decls)[place.local].ty.is_ref() {
-                                    let r_ty = (*local_decls)[place.local].ty;
+                                // if !place.is_indirect_first_projection() || (*local_decls)[place.local].ty.is_ref() {
+                                //     let r_ty = (*local_decls)[place.local].ty;
                                     match lhs_type.kind() {
                                         crate::ty::RawPtr(tm) => {
                                             // if tm.ty.is_sized(tcx, param_env) {
                                                 // && lhs_type.peel_refs().is_sized(tcx, ParamEnv::reveal_all()) {
-                                                eprintln!("Ok this is the place {:?} type {:?} {:?}", place, lhs_type, r_ty);
-                                                let is_unsafe_cell = get_pointee_type(r_ty)
-                                                    .is_some_and(|ty: Ty<'_>| ty.ty_adt_def().is_some_and(|adt| adt.is_unsafe_cell())) ;
-                                                if is_unsafe_cell {
-                                                    eprintln!("Found Unsafe Cell {:?}", r_ty);
-                                                }
-                                                let is_foreign = get_pointee_type(r_ty)
+                                                // let is_unsafe_cell = get_pointee_type(r_ty)
+                                                //     .is_some_and(|ty: Ty<'_>| ty.ty_adt_def().is_some_and(|adt| adt.is_unsafe_cell())) ;
+                                                // if is_unsafe_cell {
+                                                //     eprintln!("Found Unsafe Cell {:?}", r_ty);
+                                                // }
+                                                let is_foreign = get_pointee_type(lhs_type)
                                                     .is_some_and(|ty| matches!(ty.kind(), &ty::Foreign(_)));
                                                 // insert_borrow(tcx, rapture_crate_number, &mut patch, bb, data,
                                                     // i, mutability, lhs_type, lhs, is_unsafe_cell);
@@ -233,7 +288,7 @@ fn first_pass<'ctx>(tcx: TyCtxt<'ctx>, body: &mut Body<'ctx>,
                                         },
                                         _ => ()
                                     }
-                                }
+                                // }
                             },
                             Rvalue::Cast(cast_kind, operand, ty) => {
                                 // // println!("Cast found of kind {:?} with operand {:?} and type {:?}", cast_kind, operand, ty);
@@ -284,18 +339,36 @@ fn first_pass<'ctx>(tcx: TyCtxt<'ctx>, body: &mut Body<'ctx>,
                             },
                             Rvalue::Ref(_region, borrow_kind, place) => {
                                 // check if this is &*p where p is a raw pointer and of a sized type
-                                if place.is_indirect_first_projection() &&
-                                    (*local_decls)[place.local].ty.is_unsafe_ptr() {
-                                    // lhs_type.peel_refs().is_sized(tcx, param_env){
-                                    // println!("Ref {:?} = {:?}, lhs type peeled = {:?}", lhs_type, place, lhs_type.peel_refs());
-                                    let is_foreign = get_pointee_type(lhs_type)
-                                        .is_some_and(|ty| matches!(ty.kind(), &ty::Foreign(_)));
-                                    let mutability = match borrow_kind {
-                                        BorrowKind::Mut { .. } => Mutability::Mut,
-                                        _ => Mutability::Not
-                                    };
+                                let is_borrow = place.is_indirect_first_projection() &&
+                                    (*local_decls)[place.local].ty.is_unsafe_ptr();
+
+                                // println!("Ref {:?} = {:?}, lhs type peeled = {:?}", lhs_type, place, lhs_type.peel_refs());
+                                let is_foreign = get_pointee_type(lhs_type)
+                                    .is_some_and(|ty| matches!(ty.kind(), &ty::Foreign(_)));
+                                let mutability = match borrow_kind {
+                                    BorrowKind::Mut { .. } => Mutability::Mut,
+                                    _ => Mutability::Not
+                                };
+                                if is_borrow {
                                     insert_borrow(tcx, rapture_crate_number, &mut patch, bb, data, i,
                                         &mutability, lhs_type, lhs, false, is_foreign);
+                                    _patch_empty = false;
+                                    break;
+                                } else if !place.projection.is_empty() && place.projection.iter().find(
+                                    // check if it is projected to a sub-region
+                                    |proj|
+                                        match proj {
+                                            &ProjectionElem::Field(_, _) |
+                                            &ProjectionElem::Index(_) |
+                                            &ProjectionElem::Subslice { .. } |
+                                            &ProjectionElem::ConstantIndex { .. } =>
+                                                true,
+                                            _ => false
+                                        }
+                                    ).is_some()
+                                {
+                                    insert_shrink(tcx, rapture_crate_number, &mut patch, bb, data, i,
+                                        &mutability, lhs_type, lhs, is_foreign);
                                     _patch_empty = false;
                                     break;
                                 }
