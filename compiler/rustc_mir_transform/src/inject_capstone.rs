@@ -378,10 +378,10 @@ fn first_pass<'ctx>(tcx: TyCtxt<'ctx>, body: &mut Body<'ctx>,
                                         }
                                     ).is_some()
                                 {
-                                    insert_shrink(tcx, rapture_crate_number, &mut patch, bb, data, i,
-                                        &mutability, lhs_type, lhs, is_foreign);
-                                    _patch_empty = false;
-                                    break;
+                                    // insert_shrink(tcx, rapture_crate_number, &mut patch, bb, data, i,
+                                    //     &mutability, lhs_type, lhs, is_foreign);
+                                    // _patch_empty = false;
+                                    // break;
                                 }
                             },
                             _ => (),
@@ -426,7 +426,7 @@ impl<'tcx> MirPass<'tcx> for InjectCapstone {
             // sess.opts.crate_name.as_ref() != Some(&"core".to_string()) &&
             sess.opts.crate_name.as_ref() != Some(&"hashbrown".to_string()) &&
             sess.opts.crate_name.as_ref() != Some(&"addr2line".to_string()) &&
-            sess.opts.crate_name.as_ref() != Some(&"std".to_string()) &&
+            // sess.opts.crate_name.as_ref() != Some(&"std".to_string()) &&
             sess.opts.crate_name.as_ref() != Some(&"gimli".to_string()) /* FIXME: just a hack */
         // match (sess.opts.capstone.as_ref(), sess.opts.crate_name.as_ref()) {
         //     (Some(c), Some(n)) => {
