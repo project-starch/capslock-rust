@@ -470,6 +470,6 @@ pub mod simd {
 #[cfg(target_arch = "riscv64")]
 #[stable(feature = "core_primitive", since = "1.43.0")]
 #[allow(missing_docs)]
-pub mod rapture;
+pub mod capslock;
 
 include!("primitive_docs.rs");

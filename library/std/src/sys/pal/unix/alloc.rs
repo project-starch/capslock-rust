@@ -40,8 +40,8 @@ unsafe impl GlobalAlloc for System {
     #[inline]
     unsafe fn dealloc(&self, ptr: *mut u8, _layout: Layout) {
         #[cfg(target_arch = "riscv64")]
-            unsafe { libc::free(core::rapture::scrub(ptr) as *mut libc::c_void) }
-            // unsafe { core::rapture::invalidate(ptr); libc::free(core::rapture::scrub(ptr) as *mut libc::c_void) }
+            unsafe { libc::free(core::capslock::scrub(ptr) as *mut libc::c_void) }
+            // unsafe { core::capslock::invalidate(ptr); libc::free(core::capslock::scrub(ptr) as *mut libc::c_void) }
         #[cfg(not(target_arch = "riscv64"))]
             libc::free(ptr as *mut libc::c_void)
     }

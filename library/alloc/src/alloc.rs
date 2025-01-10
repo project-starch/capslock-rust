@@ -68,14 +68,14 @@ pub use std::alloc::Global;
 // fn alloc_to_cap(r : Result<NonNull<[u8]>, AllocError>, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
 //     r.map(|p| {
 //         unsafe {
-//             NonNull::new_unchecked(core::rapture::create_capab_from_ptr_unsized(p.as_ptr(), layout.size()))
+//             NonNull::new_unchecked(core::capslock::create_capab_from_ptr_unsized(p.as_ptr(), layout.size()))
 //         }
 //     })
 // }
 
 #[cfg(target_arch = "riscv64")]
 fn alloc_to_cap_raw(r : *mut u8, size: usize) -> *mut u8 {
-    core::rapture::create_capab_from_ptr_unsized(r, (((size - 1) >> 3) + 1) << 3)
+    core::capslock::create_capab_from_ptr_unsized(r, (((size - 1) >> 3) + 1) << 3)
 }
 
 
@@ -146,7 +146,7 @@ pub unsafe fn alloc(layout: Layout) -> *mut u8 {
 #[inline]
 pub unsafe fn dealloc(ptr: *mut u8, layout: Layout) {
     #[cfg(target_arch = "riscv64")]
-        unsafe { core::rapture::invalidate(ptr); __rust_dealloc(core::rapture::scrub(ptr), layout.size(), layout.align()) }
+        unsafe { core::capslock::invalidate(ptr); __rust_dealloc(core::capslock::scrub(ptr), layout.size(), layout.align()) }
     #[cfg(not(target_arch = "riscv64"))]
     unsafe { __rust_dealloc(ptr, layout.size(), layout.align()) }
 }
@@ -169,8 +169,8 @@ pub unsafe fn dealloc(ptr: *mut u8, layout: Layout) {
 pub unsafe fn realloc(ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
     #[cfg(target_arch = "riscv64")]
     unsafe {
-        core::rapture::invalidate(ptr);
-        alloc_to_cap_raw(__rust_realloc(core::rapture::scrub(ptr), layout.size(), layout.align(), new_size), new_size)
+        core::capslock::invalidate(ptr);
+        alloc_to_cap_raw(__rust_realloc(core::capslock::scrub(ptr), layout.size(), layout.align(), new_size), new_size)
     }
     #[cfg(not(target_arch = "riscv64"))]
     unsafe { __rust_realloc(ptr, layout.size(), layout.align(), new_size) }
@@ -305,8 +305,8 @@ unsafe impl Allocator for Global {
         // SAFETY: all conditions must be upheld by the caller
         // #[cfg(target_arch = "riscv64")]
         // unsafe {
-        //     core::rapture::invalidate(ptr.as_ptr());
-        //     let ptr = NonNull::new_unchecked(core::rapture::scrub(ptr.as_ptr()));
+        //     core::capslock::invalidate(ptr.as_ptr());
+        //     let ptr = NonNull::new_unchecked(core::capslock::scrub(ptr.as_ptr()));
         //     self.grow_impl(ptr, old_layout, new_layout, false)
         // }
         // #[cfg(not(target_arch = "riscv64"))]
@@ -323,8 +323,8 @@ unsafe impl Allocator for Global {
         // SAFETY: all conditions must be upheld by the caller
         // #[cfg(target_arch = "riscv64")]
         // unsafe {
-        //     core::rapture::invalidate(ptr.as_ptr());
-        //     let ptr = NonNull::new_unchecked(core::rapture::scrub(ptr.as_ptr()));
+        //     core::capslock::invalidate(ptr.as_ptr());
+        //     let ptr = NonNull::new_unchecked(core::capslock::scrub(ptr.as_ptr()));
         //     self.grow_impl(ptr, old_layout, new_layout, true)
         // }
         // #[cfg(not(target_arch = "riscv64"))]

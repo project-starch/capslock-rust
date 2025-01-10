@@ -1091,7 +1091,7 @@ impl Default for Options {
             color: ColorConfig::Auto,
             logical_env: FxIndexMap::default(),
             verbose: false,
-            capstone: None,
+            capslock: None,
         }
     }
 }
@@ -1774,7 +1774,7 @@ pub fn rustc_short_optgroups() -> Vec<RustcOptGroup> {
         opt::multi_s("C", "codegen", "Set a codegen option", "OPT[=VALUE]"),
         opt::flag_s("V", "version", "Print version info and exit"),
         opt::flag_s("v", "verbose", "Use verbose output"),
-        opt::opt_s("", "capstone", "Use Capstone for specified crate", "CAPSTONE"),
+        opt::opt_s("", "capslock", "Use CapsLock for specified crate", "CapsLock"),
     ]
 }
 
@@ -2906,7 +2906,7 @@ pub fn build_session_options(early_dcx: &mut EarlyDiagCtxt, matches: &getopts::M
     };
 
     let verbose = matches.opt_present("verbose") || unstable_opts.verbose_internals;
-    let capstone = matches.opt_str("capstone");
+    let capslock = matches.opt_str("capslock");
 
     Options {
         assert_incr_state,
@@ -2950,7 +2950,7 @@ pub fn build_session_options(early_dcx: &mut EarlyDiagCtxt, matches: &getopts::M
         color,
         logical_env,
         verbose,
-        capstone,
+        capslock,
     }
 }
 

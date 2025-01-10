@@ -1506,7 +1506,7 @@ pub fn init_logger(early_dcx: &EarlyDiagCtxt, cfg: rustc_log::LoggerConfig) {
     }
 }
 
-pub fn main() -> ! {    
+pub fn main() -> ! {
     unsafe {
         for (key, value) in env::vars() {
             if key.starts_with("RUSTC_BOOTSTRAP") && (value == "1") {
@@ -1516,7 +1516,7 @@ pub fn main() -> ! {
         }
 
         if !IS_BOOTSTRAP {
-            eprintln!("\nCompiling using CAPSTONE-Rust custom compiler (v2.00, pFRP-enabled)\n");
+            eprintln!("\nCompiling using CapsLock custom compiler\n");
         }
     }
 
